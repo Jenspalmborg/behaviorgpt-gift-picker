@@ -1,0 +1,15 @@
+[project]
+name = "behaviorgpt-gift-picker"
+version = "0.1.0"
+description = "Pick gifts from someone's interests using BehaviorGPT"
+requires-python = ">=3.11"
+dependencies = [
+    "behaviorgpt @ git+https://github.com/Unbox-AI/behaviorgpt",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-dotenv>=1.0",
+    "pandas>=3.0.6",
+]
+
+[tool.uv]
+package = false

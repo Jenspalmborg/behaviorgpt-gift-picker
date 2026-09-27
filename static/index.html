@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gift Picker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fbfaf8;
+    --surface: #ffffff;
+    --ink: #16140f;
+    --ink-2: #57524a;
+    --ink-3: #8f887d;
+    --line: #ebe7e0;
+    --accent: #c2410c;
+    --accent-ink: #ffffff;
+    --accent-soft: #fdf0e8;
+    --shadow: 0 1px 2px rgba(22, 20, 15, .04), 0 8px 24px rgba(22, 20, 15, .06);
+    --shadow-lg: 0 2px 4px rgba(22, 20, 15, .04), 0 18px 48px rgba(22, 20, 15, .10);
+    --radius: 16px;
+    --serif: "Fraunces", Georgia, serif;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12110e; --surface: #1c1a16; --ink: #f4f1ec; --ink-2: #bdb6ab; --ink-3: #857e73;
+      --line: #2c2924; --accent: #f97316; --accent-ink: #1a0d04; --accent-soft: #2b1a0e;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+      --shadow-lg: 0 2px 4px rgba(0,0,0,.3), 0 18px 48px rgba(0,0,0,.4);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.55 var(--sans); -webkit-font-smoothing: antialiased;
+    min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column;
+  }
+  /* One-screen layout: results take whatever height is left, images flex to fit. */
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  @media (max-width: 600px) { .wrap { padding: 0 16px; } }
+
+  /* Nav */
+  nav { border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 85%, transparent);
+        backdrop-filter: blur(8px); position: sticky; top: 0; z-index: 10; }
+  nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -.01em; color: var(--ink); text-decoration: none; }
+  .logo-mark { width: 30px; height: 30px; border-radius: 9px; background: var(--accent); display: grid; place-items: center; }
+  .logo-mark svg { width: 17px; height: 17px; }
+  .nav-note { font-size: 14px; color: var(--ink-3); }
+  @media (max-width: 480px) { .nav-note { display: none; } }
+
+  /* Hero */
+  .hero { padding: clamp(20px, 5vh, 48px) 0 clamp(16px, 3vh, 28px); text-align: center; }
+  h1 { font-family: var(--serif); font-weight: 500; font-size: clamp(30px, 4.4vw, 48px);
+       line-height: 1.1; letter-spacing: -.025em; margin: 0 auto 8px; }
+  h1 em { font-style: italic; color: var(--accent); }
+  .lede { font-size: 16px; color: var(--ink-2); max-width: 64ch; margin: 0 auto; text-wrap: balance; }
+  @media (max-width: 600px) { .hero { padding: 20px 0 16px; } .lede { font-size: 14px; } }
+
+  /* Form card */
+  .finder { background: var(--surface); border: 1px solid var(--line); border-radius: 20px;
+            box-shadow: var(--shadow-lg); padding: 10px; max-width: 920px; margin: 0 auto; }
+  .fields { display: grid; grid-template-columns: 1fr 2fr 0.8fr auto; align-items: stretch; }
+  .field { padding: 10px 18px; border-radius: 12px; display: flex; flex-direction: column; justify-content: center;
+           min-width: 0; transition: background .15s; cursor: text; }
+  .field + .field { border-left: 1px solid var(--line); }
+  .field:focus-within { background: var(--bg); }
+  .field label { font-size: 12px; font-weight: 600; color: var(--ink); margin-bottom: 2px; cursor: text; }
+  .field input { border: 0; background: none; outline: none; font: inherit; font-size: 15px; color: var(--ink);
+                 padding: 2px 0; width: 100%; min-width: 0; }
+  .field input::placeholder { color: var(--ink-3); }
+  .budget-in { display: flex; align-items: center; gap: 2px; }
+  .budget-in span { color: var(--ink-3); font-size: 15px; }
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+  input[type=number] { -moz-appearance: textfield; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; background: var(--accent-soft); color: var(--ink);
+          border-radius: 999px; padding: 3px 4px 3px 11px; font-size: 14px; font-weight: 500; line-height: 1.4; }
+  .chip button { border: 0; background: none; color: var(--ink-3); cursor: pointer; width: 20px; height: 20px;
+                 border-radius: 50%; display: grid; place-items: center; font-size: 15px; padding: 0; }
+  .chip button:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--ink); }
+  .chips input { flex: 1; min-width: 120px; }
+
+  .go { border: 0; background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 600;
+        border-radius: 12px; padding: 0 26px; margin-left: 8px; cursor: pointer; display: flex; align-items: center;
+        gap: 8px; white-space: nowrap; transition: transform .1s, filter .15s; }
+  .go:hover { filter: brightness(1.07); }
+  .go:active { transform: scale(.98); }
+  .go:disabled { cursor: wait; filter: saturate(.6); }
+  .go svg { width: 18px; height: 18px; }
+
+  @media (max-width: 800px) {
+    .fields { grid-template-columns: 1fr 1fr; }
+    .field-interests { grid-column: 1 / -1; order: 3; border-left: 0 !important; border-top: 1px solid var(--line); }
+    .go { grid-column: 1 / -1; order: 4; margin: 8px 0 0; padding: 14px; justify-content: center; }
+  }
+
+  /* Results */
+  .results { padding-top: clamp(16px, 3vh, 32px); padding-bottom: clamp(12px, 3vh, 32px); width: 100%;
+             flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .results-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+  .results-head h2 { font-family: var(--serif); font-weight: 500; font-size: 24px; letter-spacing: -.015em; margin: 0; }
+  .results-head p { margin: 2px 0 0; color: var(--ink-3); font-size: 14px; }
+  .reset { font: inherit; font-size: 14px; color: var(--ink-2); background: none; border: 0; cursor: pointer;
+           text-decoration: underline; text-underline-offset: 3px; padding: 0; }
+  .reset:hover { color: var(--ink); }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 1fr; gap: 24px; flex: 1; min-height: 0; }
+  @media (max-width: 860px) { .grid { gap: 16px; } .gift .body { padding: 14px 16px 16px; } .price { font-size: 19px; } .shop { padding: 6px 10px; } }
+
+  .gift { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+          display: flex; flex-direction: column; box-shadow: var(--shadow); transition: transform .2s, box-shadow .2s;
+          animation: rise .45s both; }
+  .gift:nth-child(2) { animation-delay: .07s; } .gift:nth-child(3) { animation-delay: .14s; }
+  .gift:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+  .gift .img { flex: 1; min-height: 100px; max-height: 300px; background: #fff; display: grid; place-items: center; border-bottom: 1px solid var(--line); position: relative; }
+  .gift img { max-width: 78%; max-height: 82%; object-fit: contain; position: absolute; inset: 0; margin: auto; }
+  .rank { position: absolute; top: 12px; left: 12px; font-size: 12px; font-weight: 600; background: var(--ink); color: var(--bg);
+          padding: 3px 10px; border-radius: 999px; }
+  .gift .body { padding: 14px 18px 16px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .reason { font-size: 12px; font-weight: 600; color: var(--accent); letter-spacing: .02em; }
+  .name { font-weight: 500; line-height: 1.4; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical; overflow: hidden; }
+  .foot { margin-top: auto; padding-top: 6px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .price { font-family: var(--serif); font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+  .shop { font-size: 14px; font-weight: 500; color: var(--ink); text-decoration: none; border: 1px solid var(--line);
+          padding: 7px 14px; border-radius: 10px; transition: border-color .15s; white-space: nowrap; }
+  .shop:hover { border-color: var(--ink); }
+
+  /* Loading skeleton */
+  .skel { pointer-events: none; animation: none; }
+  .skel .img, .skel .bar { background: linear-gradient(90deg, var(--line) 25%, var(--bg) 50%, var(--line) 75%);
+                          background-size: 200% 100%; animation: shimmer 1.3s infinite linear; }
+  .skel .bar { height: 12px; border-radius: 6px; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+
+  .notice { margin-top: 24px; padding: 14px 18px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line);
+            font-size: 14px; color: var(--ink-2); }
+  .empty { text-align: center; padding: 48px 24px; border: 1px dashed var(--line); border-radius: var(--radius); color: var(--ink-2); }
+  .empty.error { color: #b42318; border-color: color-mix(in srgb, #b42318 35%, transparent); }
+
+  @media (max-width: 640px) {
+    .grid { grid-template-columns: 1fr; grid-auto-rows: auto; gap: 10px; flex: none; }
+    .gift { flex-direction: row; }
+    .gift .img { width: 104px; flex: none; min-height: 104px; max-height: none; border-bottom: 0; border-right: 1px solid var(--line); }
+    .gift .body { padding: 10px 12px; gap: 3px; min-width: 0; }
+    .rank { top: 6px; left: 6px; font-size: 10px; padding: 2px 7px; }
+    .name { font-size: 14px; }
+    .price { font-size: 17px; }
+    .shop { font-size: 13px; padding: 4px 9px; }
+    .results-head h2 { font-size: 21px; }
+    .results-head p { display: none; }
+    .lede { display: none; }
+    nav .wrap { height: 48px; }
+    .hero { padding: 14px 0 12px; }
+    h1 { font-size: 27px; margin: 0; }
+    .field { padding: 7px 14px; }
+    .go { padding: 11px; margin-top: 6px; }
+    .results { padding-top: 16px; }
+    .results-head { margin-bottom: 10px; }
+    .gift .img { width: 88px; min-height: 88px; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="logo" href="/">
+      <span class="logo-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5"/></svg>
+      </span>
+      Gift Picker
+    </a>
+    <span class="nav-note">Powered by BehaviorGPT</span>
+  </div>
+</nav>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <h1>Gifts they’ll <em>actually</em> love.</h1>
+      <p class="lede">Tell us what someone’s into, and we’ll predict what they’d reach for next.</p>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <form class="finder" id="finder" autocomplete="off">
+      <div class="fields">
+        <div class="field" data-for="name">
+          <label for="name">Who’s it for?</label>
+          <input id="name" type="text" placeholder="Name or relation">
+        </div>
+        <div class="field field-interests" data-for="interest-input">
+          <label for="interest-input">Their interests</label>
+          <div class="chips" id="chips">
+            <input id="interest-input" type="text" placeholder="Type and press Enter">
+          </div>
+        </div>
+        <div class="field" data-for="budget">
+          <label for="budget">Budget</label>
+          <div class="budget-in"><span>$</span><input id="budget" type="number" min="0" inputmode="numeric" placeholder="Any"></div>
+        </div>
+        <button class="go" id="go" type="submit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <span>Find gifts</span>
+        </button>
+      </div>
+    </form>
+  </section>
+
+  <section class="results wrap" id="results" aria-live="polite"></section>
+</main>
+
+
+<script>
+const state = { interests: [], result: null, loading: false };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function addInterests(text) {
+  text.split(",").map(t => t.trim()).filter(Boolean)
+    .forEach(t => { if (!state.interests.includes(t)) state.interests.push(t); });
+}
+
+function renderChips() {
+  const input = $("interest-input");
+  $("chips").querySelectorAll(".chip").forEach(c => c.remove());
+  state.interests.forEach((t, i) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.innerHTML = `${esc(t)}<button type="button" aria-label="Remove ${esc(t)}">×</button>`;
+    chip.querySelector("button").onclick = (e) => {
+      e.stopPropagation(); state.interests.splice(i, 1); renderChips(); input.focus();
+    };
+    $("chips").insertBefore(chip, input);
+  });
+  input.placeholder = state.interests.length ? "Add another" : "Type and press Enter";
+}
+
+const skeleton = () => `<article class="gift skel"><div class="img"></div><div class="body">
+  <div class="bar" style="width:40%"></div><div class="bar" style="width:90%"></div><div class="bar" style="width:65%"></div>
+  <div class="foot"><div class="bar" style="width:30%;height:20px"></div></div></div></article>`;
+
+function renderResults() {
+  const el = $("results"), r = state.result;
+  if (state.loading) {
+    el.innerHTML = `<div class="results-head"><h2>Finding ideas…</h2></div><div class="grid">${skeleton().repeat(3)}</div>`;
+    return;
+  }
+  if (!r) { el.innerHTML = ""; return; }
+  if (r.error) { el.innerHTML = `<div class="empty error">${esc(r.error)}</div>`; return; }
+
+  const missed = r.unmatched?.length
+    ? `<div class="notice">We couldn’t find anything for <b>${esc(r.unmatched.join(", "))}</b> in this catalog, so ${r.unmatched.length > 1 ? "those were" : "that was"} left out.</div>`
+    : "";
+  if (!r.picks.length) {
+    el.innerHTML = `<div class="empty">No matches yet. Try more specific interests (like “trail running shoes”) or a higher budget.</div>${missed}`;
+    return;
+  }
+  const who = r.person ? esc(r.person) : "them";
+  el.innerHTML = `
+    <div class="results-head">
+      <div><h2>Gift ideas for ${who}</h2><p>Based on ${esc(r.interests.join(", "))}</p></div>
+      <button class="reset" type="button" id="reset">Start over</button>
+    </div>
+    <div class="grid">` +
+    r.picks.map((g, i) => `
+      <article class="gift">
+        <div class="img">
+          ${i === 0 ? `<span class="rank">Top pick</span>` : ""}
+          ${g.image_url ? `<img src="${esc(g.image_url)}" alt="" loading="lazy">` : ""}
+        </div>
+        <div class="body">
+          <div class="reason">${esc(g.reason)}</div>
+          <div class="name" title="${esc(g.name)}">${esc(g.name)}</div>
+          <div class="foot">
+            <span class="price">${g.price != null ? "$" + g.price.toFixed(2) : ""}</span>
+            <a class="shop" href="https://www.amazon.com/s?k=${encodeURIComponent(g.name)}" target="_blank" rel="noopener">Find it →</a>
+          </div>
+        </div>
+      </article>`).join("") + `</div>` + missed;
+  $("reset").onclick = reset;
+}
+
+function reset() {
+  state.interests = []; state.result = null;
+  $("name").value = ""; $("budget").value = ""; $("interest-input").value = "";
+  renderChips(); renderResults();
+  window.scrollTo({ top: 0, behavior: "smooth" }); $("name").focus({ preventScroll: true });
+}
+
+// Clicking anywhere in a field focuses its input.
+document.querySelectorAll(".field").forEach(f =>
+  f.addEventListener("click", () => $(f.dataset.for).focus()));
+
+$("interest-input").addEventListener("keydown", e => {
+  const v = e.target.value.trim();
+  if ((e.key === "Enter" || e.key === ",") && v) {
+    e.preventDefault(); addInterests(v); e.target.value = ""; renderChips();
+  } else if (e.key === "Backspace" && !e.target.value && state.interests.length) {
+    state.interests.pop(); renderChips();
+  }
+  // Enter on an empty input falls through and submits the form.
+});
+
+$("finder").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (state.loading) return;
+  const pending = $("interest-input").value.trim();
+  if (pending) { addInterests(pending); $("interest-input").value = ""; renderChips(); }
+  if (!state.interests.length) {
+    $("interest-input").focus();
+    state.result = { error: "Add at least one interest to get started." }; renderResults(); return;
+  }
+  state.loading = true; $("go").disabled = true; renderResults();
+  try {
+    const budget = $("budget").value;
+    const res = await fetch("/api/gifts", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ person: $("name").value.trim(), interests: state.interests, max_price: budget ? +budget : null }),
+    });
+    const data = await res.json();
+    state.result = res.ok ? data : { error: data.detail || "Something went wrong." };
+  } catch {
+    state.result = { error: "Couldn’t reach the server. Is it running?" };
+  }
+  state.loading = false; $("go").disabled = false; renderResults();
+});
+
+// Shareable links: /?for=Mom&interests=running,hiking,flowers&budget=50 runs the search on load.
+const params = new URLSearchParams(location.search);
+if (params.get("interests")) {
+  $("name").value = params.get("for") || "";
+  $("budget").value = params.get("budget") || "";
+  addInterests(params.get("interests"));
+  renderChips();
+  $("finder").requestSubmit();
+} else {
+  renderChips();
+}
+</script>
+</body>
+</html>
