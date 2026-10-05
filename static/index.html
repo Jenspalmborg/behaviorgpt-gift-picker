@@ -98,6 +98,14 @@
   .pin-in svg { width: 16px; height: 16px; color: #e60023; flex: none; }
   [hidden] { display: none !important; }
 
+  /* Occasion / relationship / age */
+  .extras { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 8px 4px; margin-top: 8px; border-top: 1px solid var(--line); }
+  .pick { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--ink-3); background: var(--bg);
+          border: 1px solid var(--line); border-radius: 999px; padding: 3px 4px 3px 12px; cursor: pointer; }
+  .pick.set { background: var(--accent-soft); border-color: transparent; color: var(--ink-2); }
+  .pick select { border: 0; background: none; font: inherit; font-weight: 500; color: var(--ink); outline: none; cursor: pointer; padding: 2px 4px; }
+  .pick:focus-within { border-color: var(--ink-3); }
+
   .go { border: 0; background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 600;
         border-radius: 12px; padding: 0 26px; margin-left: 8px; cursor: pointer; display: flex; align-items: center;
         gap: 8px; white-space: nowrap; transition: transform .1s, filter .15s; }
@@ -123,6 +131,13 @@
   .reset { font: inherit; font-size: 14px; color: var(--ink-2); background: none; border: 0; cursor: pointer;
            text-decoration: underline; text-underline-offset: 3px; padding: 0; }
   .reset:hover { color: var(--ink); }
+  .head-actions { display: flex; align-items: center; gap: 16px; }
+  .btn { font: inherit; font-size: 14px; font-weight: 500; color: var(--ink); background: var(--surface); border: 1px solid var(--line);
+         border-radius: 10px; padding: 7px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: border-color .15s; }
+  .btn:hover { border-color: var(--ink); }
+  .btn:disabled { opacity: .5; cursor: wait; }
+  .btn svg { width: 15px; height: 15px; }
+  .tip { font-size: 13px; color: var(--ink-3); margin: -6px 0 12px; }
 
   .grid { display: grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 1fr; gap: 24px; flex: 1; min-height: 0; }
   @media (max-width: 860px) { .grid { gap: 16px; } .gift .body { padding: 14px 16px 16px; } .price { font-size: 19px; } .shop { padding: 6px 10px; } }
@@ -146,6 +161,30 @@
   .shop { font-size: 14px; font-weight: 500; color: var(--ink); text-decoration: none; border: 1px solid var(--line);
           padding: 7px 14px; border-radius: 10px; transition: border-color .15s; white-space: nowrap; }
   .shop:hover { border-color: var(--ink); }
+  .foot-r { display: flex; align-items: center; gap: 6px; }
+  .act { width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-3);
+         display: grid; place-items: center; cursor: pointer; padding: 0; transition: color .15s, border-color .15s; }
+  .act svg { width: 16px; height: 16px; }
+  .act:hover { color: var(--ink); border-color: var(--ink); }
+  .act.save:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* Shortlist */
+  .shortlist { margin-top: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+  .sl-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .sl-head h3 { font-family: var(--serif); font-weight: 500; font-size: 19px; margin: 0; }
+  .sl-head h3 span { color: var(--ink-3); font-family: var(--sans); font-size: 14px; font-weight: 400; }
+  .sl-items { list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+  .sl-items li { display: flex; align-items: center; gap: 10px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+  .sl-items img, .sl-items .noimg { width: 44px; height: 44px; object-fit: contain; background: #fff; border-radius: 8px; flex: none; }
+  .sl-items a { color: var(--ink); text-decoration: none; font-size: 14px; line-height: 1.35; flex: 1; min-width: 0;
+                display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .sl-items a:hover { text-decoration: underline; }
+  .sl-items .p { font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+  .sl-items button { border: 0; background: none; color: var(--ink-3); cursor: pointer; width: 26px; height: 26px; border-radius: 50%; font-size: 16px; flex: none; }
+  .sl-items button:hover { background: var(--bg); color: var(--ink); }
+  .share-out { display: flex; gap: 8px; margin-top: 12px; }
+  .share-out input { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 10px;
+                     background: var(--bg); color: var(--ink); }
 
   /* Loading skeleton */
   .skel { pointer-events: none; animation: none; }
@@ -179,6 +218,10 @@
     .results { padding-top: 16px; }
     .results-head { margin-bottom: 10px; }
     .gift .img { width: 88px; min-height: 88px; }
+    .act { width: 30px; height: 30px; }
+    .head-actions { gap: 12px; }
+    .tip { display: none; }
+    .extras { padding: 8px 4px 2px; }
   }
 </style>
 </head>
@@ -233,6 +276,25 @@
           <span>Find gifts</span>
         </button>
       </div>
+      <div class="extras">
+        <label class="pick"><span>Occasion</span>
+          <select id="occasion">
+            <option value="">Any</option><option value="birthday">Birthday</option><option value="christmas">Christmas</option>
+            <option value="anniversary">Anniversary</option><option value="wedding">Wedding</option><option value="housewarming">Housewarming</option>
+            <option value="baby shower">Baby shower</option><option value="thank you">Thank you</option>
+          </select></label>
+        <label class="pick"><span>For my</span>
+          <select id="relationship">
+            <option value="">Anyone</option><option value="partner">Partner</option><option value="mom">Mom</option><option value="dad">Dad</option>
+            <option value="sister">Sister</option><option value="brother">Brother</option><option value="friend">Friend</option>
+            <option value="coworker">Coworker</option><option value="grandma">Grandma</option><option value="grandpa">Grandpa</option>
+          </select></label>
+        <label class="pick"><span>Age</span>
+          <select id="age">
+            <option value="">Any</option><option value="baby">Baby</option><option value="kid">Kid</option><option value="teen">Teen</option>
+            <option value="adult">Adult</option><option value="senior">Senior</option>
+          </select></label>
+      </div>
     </form>
   </section>
 
@@ -241,7 +303,7 @@
 
 
 <script>
-const state = { mode: "interests", interests: [], result: null, loading: false };
+const state = { mode: "interests", interests: [], loading: false, error: null };
 const PIN_ICON = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.6 19.3c-.1-.8-.2-2 0-2.9l1.2-5s-.3-.6-.3-1.5c0-1.4.8-2.4 1.8-2.4.9 0 1.3.6 1.3 1.4 0 .9-.5 2.2-.8 3.4-.2 1 .5 1.9 1.6 1.9 1.9 0 3.3-2 3.3-4.9 0-2.6-1.8-4.4-4.5-4.4-3 0-4.8 2.3-4.8 4.6 0 .9.4 1.9.8 2.4l.1.4-.3 1.2c0 .2-.2.3-.4.2-1.3-.6-2.2-2.6-2.2-4.2 0-3.4 2.5-6.6 7.2-6.6 3.8 0 6.7 2.7 6.7 6.3 0 3.7-2.4 6.8-5.6 6.8-1.1 0-2.2-.6-2.5-1.3l-.7 2.6c-.2 1-.9 2.2-1.4 2.9A10 10 0 1 0 12 2z"/></svg>`;
 const isPinterest = (t) => /pinterest\.|pin\.it\//i.test(t);
 document.querySelectorAll(".pin-icon").forEach(el => el.outerHTML = PIN_ICON);
@@ -280,65 +342,215 @@ function renderChips() {
   input.placeholder = state.interests.length ? "Add another" : "Type and press Enter";
 }
 
+const ICONS = {
+  heart: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.5-1.5 3-3.3 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.8 0-3 .5-4.5 2-1.5-1.5-2.7-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7Z"/></svg>`,
+  x: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>`,
+  shuffle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/></svg>`,
+  share: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/></svg>`,
+};
+
+// The shortlist survives reloads in this browser; everything else is per search.
+const SAVED_KEY = "giftpicker.saved";
+function loadSaved() { try { return JSON.parse(localStorage.getItem(SAVED_KEY)) || []; } catch { return []; } }
+function storeSaved() { try { localStorage.setItem(SAVED_KEY, JSON.stringify(state.saved)); } catch {} }
+Object.assign(state, {
+  query: null,     // the search as submitted; refinements reuse it
+  meta: null,      // what the first response said about the search
+  cards: [],       // the three suggestions on screen
+  busy: new Set(), // slots being replaced
+  shown: [], liked: [], avoid: [],
+  saved: loadSaved(),
+  shareUrl: null, sharing: false, flash: null,
+});
+
 const skeleton = () => `<article class="gift skel"><div class="img"></div><div class="body">
   <div class="bar" style="width:40%"></div><div class="bar" style="width:90%"></div><div class="bar" style="width:65%"></div>
   <div class="foot"><div class="bar" style="width:30%;height:20px"></div></div></div></article>`;
 
+const money = (p) => p != null ? "$" + p.toFixed(2) : "";
+const OCCASION_TITLES = { "baby shower": "Baby shower", "thank you": "Thank-you" };
+const titleCase = (t) => OCCASION_TITLES[t] || t[0].toUpperCase() + t.slice(1);
+
+function card(g, i) {
+  if (state.busy.has(i)) return skeleton();
+  return `
+    <article class="gift">
+      <div class="img">
+        ${g.reason.startsWith("Top match") ? `<span class="rank">Top pick</span>` : ""}
+        ${g.image_url ? `<img src="${esc(g.image_url)}" alt="" loading="lazy">` : ""}
+      </div>
+      <div class="body">
+        <div class="reason">${esc(g.reason)}</div>
+        <div class="name" title="${esc(g.name)}">${esc(g.name)}</div>
+        <div class="foot">
+          <span class="price">${money(g.price)}</span>
+          <div class="foot-r">
+            <button class="act save" type="button" data-save="${i}" title="Save, and find more like this" aria-label="Save ${esc(g.name)} and find more like it">${ICONS.heart}</button>
+            <button class="act nope" type="button" data-nope="${i}" title="Not for them, show something else" aria-label="Not for them: replace ${esc(g.name)}">${ICONS.x}</button>
+            <a class="shop" href="${esc(g.url)}" target="_blank" rel="noopener">Find it →</a>
+          </div>
+        </div>
+      </div>
+    </article>`;
+}
+
+function shortlist() {
+  if (!state.saved.length) return "";
+  return `
+    <section class="shortlist" aria-label="Shortlist">
+      <div class="sl-head">
+        <h3>Shortlist <span>(${state.saved.length})</span></h3>
+        <button class="btn" type="button" id="share" ${state.sharing ? "disabled" : ""}>${ICONS.share}Share for votes</button>
+      </div>
+      <ul class="sl-items">${state.saved.map((g, i) => `
+        <li>
+          ${g.image_url ? `<img src="${esc(g.image_url)}" alt="" loading="lazy">` : `<span class="noimg"></span>`}
+          <a href="${esc(g.url)}" target="_blank" rel="noopener" title="${esc(g.name)}">${esc(g.name)}</a>
+          <span class="p">${money(g.price)}</span>
+          <button type="button" data-unsave="${i}" aria-label="Remove ${esc(g.name)} from shortlist">×</button>
+        </li>`).join("")}
+      </ul>
+      ${state.shareUrl ? `<div class="share-out"><input id="share-url" readonly value="${esc(state.shareUrl)}" aria-label="Shareable link">
+        <button class="btn" type="button" id="copy">Copy link</button></div>` : ""}
+    </section>`;
+}
+
 function renderResults() {
-  const el = $("results"), r = state.result;
+  const el = $("results"), r = state.meta;
   if (state.loading) {
     el.innerHTML = `<div class="results-head"><h2>Finding ideas…</h2></div><div class="grid">${skeleton().repeat(3)}</div>`;
     return;
   }
-  if (!r) { el.innerHTML = ""; return; }
-  if (r.error) { el.innerHTML = `<div class="empty error">${esc(r.error)}</div>`; return; }
+  if (state.error) { el.innerHTML = `<div class="empty error">${esc(state.error)}</div>` + shortlist(); return bind(); }
+  if (!r) { el.innerHTML = shortlist(); return bind(); }
 
   const missed = r.unmatched?.length
     ? `<div class="notice">We couldn’t find anything for <b>${esc(r.unmatched.join(", "))}</b> in this catalog, so ${r.unmatched.length > 1 ? "those were" : "that was"} left out.</div>`
     : "";
-  if (!r.picks.length) {
-    el.innerHTML = `<div class="empty">No matches yet. Try more specific interests (like “trail running shoes”) or a higher budget.</div>${missed}`;
-    return;
+  const flash = state.flash ? `<div class="notice">${esc(state.flash)}</div>` : "";
+  if (!state.cards.length && !state.busy.size) {
+    el.innerHTML = `<div class="empty">No matches yet. Try more specific interests (like “trail running shoes”) or a higher budget.</div>${missed}${shortlist()}`;
+    return bind();
   }
   const who = r.person ? esc(r.person) : "them";
+  const kind = r.occasion ? `${titleCase(r.occasion)} gift ideas` : "Gift ideas";
   const basis = [
     ...(r.pinterest ? [`<a href="${esc(r.pinterest.url)}" target="_blank" rel="noopener">${r.pinterest.pins} recent pins</a>`] : []),
     ...r.interests.map(esc),
   ].join(", ");
   el.innerHTML = `
     <div class="results-head">
-      <div><h2>Gift ideas for ${who}</h2><p>Based on ${basis}</p></div>
-      <button class="reset" type="button" id="reset">Start over</button>
+      <div><h2>${kind} for ${who}</h2><p>Based on ${basis}${state.liked.length ? ` and ${state.liked.length} saved` : ""}</p></div>
+      <div class="head-actions">
+        <button class="btn" type="button" id="others" ${state.busy.size ? "disabled" : ""}>${ICONS.shuffle}Show me others</button>
+        <button class="reset" type="button" id="reset">Start over</button>
+      </div>
     </div>
-    <div class="grid">` +
-    r.picks.map((g, i) => `
-      <article class="gift">
-        <div class="img">
-          ${i === 0 ? `<span class="rank">Top pick</span>` : ""}
-          ${g.image_url ? `<img src="${esc(g.image_url)}" alt="" loading="lazy">` : ""}
-        </div>
-        <div class="body">
-          <div class="reason">${esc(g.reason)}</div>
-          <div class="name" title="${esc(g.name)}">${esc(g.name)}</div>
-          <div class="foot">
-            <span class="price">${g.price != null ? "$" + g.price.toFixed(2) : ""}</span>
-            <a class="shop" href="https://www.amazon.com/s?k=${encodeURIComponent(g.name)}" target="_blank" rel="noopener">Find it →</a>
-          </div>
-        </div>
-      </article>`).join("") + `</div>` + missed;
-  $("reset").onclick = reset;
+    <p class="tip">Tap ♥ to save an idea and get more like it, or ✕ to swap it for something else.</p>
+    <div class="grid">${state.cards.map(card).join("")}</div>${flash}${missed}${shortlist()}`;
+  bind();
+}
+
+function bind() {
+  const on = (id, fn) => { const b = $(id); if (b) b.onclick = fn; };
+  on("reset", reset); on("others", showOthers); on("share", share);
+  on("copy", async () => {
+    try { await navigator.clipboard.writeText(state.shareUrl); $("copy").textContent = "Copied"; }
+    catch { $("share-url").select(); }
+  });
+  $("results").querySelectorAll("[data-save]").forEach(b => b.onclick = () => save(+b.dataset.save));
+  $("results").querySelectorAll("[data-nope]").forEach(b => b.onclick = () => nope(+b.dataset.nope));
+  $("results").querySelectorAll("[data-unsave]").forEach(b => b.onclick = () => {
+    state.saved.splice(+b.dataset.unsave, 1); state.shareUrl = null; storeSaved(); renderResults();
+  });
+}
+
+async function fetchPicks(n, { focus = null, liked = state.liked } = {}) {
+  const exclude = [...new Set([...state.shown, ...state.saved.map(g => g.id)])].slice(-120);
+  const res = await fetch("/api/gifts", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...state.query, n, focus, liked, exclude, avoid_categories: state.avoid.slice(-30) }),
+  }).catch(() => { throw new Error("Couldn’t reach the server. Is it running?"); });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Something went wrong.");
+  state.shown.push(...data.picks.map(g => g.id));
+  return data;
+}
+
+// Replace the cards in `slots` with fresh picks; slots with no new pick are dropped.
+async function refill(slots, emptyMessage, options) {
+  slots.forEach(i => state.busy.add(i)); state.flash = null; renderResults();
+  try {
+    const { picks } = await fetchPicks(slots.length, options);
+    slots.forEach((i, k) => { state.cards[i] = picks[k] ?? null; });
+    if (picks.length < slots.length) state.flash = emptyMessage;
+  } catch (err) {
+    state.flash = err.message;
+  }
+  slots.forEach(i => state.busy.delete(i));
+  state.cards = state.cards.filter(Boolean);
+  renderResults();
+}
+
+function save(i) {
+  const g = state.cards[i];
+  if (!state.saved.some(s => s.id === g.id)) state.saved.push(g);
+  state.liked = [...state.liked.filter(id => id !== g.id), g.id].slice(-12);
+  state.shareUrl = null; storeSaved();
+  refill([i], "That’s everything we have that’s close to what you saved.");
+}
+
+const SAVED_REASON = "More like what you saved";
+
+function nope(i) {
+  const g = state.cards[i];
+  if (g.category && !state.avoid.includes(g.category)) state.avoid.push(g.category);
+  // A card from one interest is replaced from that interest. Otherwise it's the
+  // blended slot: follow the saves, unless another card already does.
+  const followingSaves = state.cards.some((c, k) => k !== i && c.reason === SAVED_REASON);
+  refill([i], "No other ideas left for that slot. Try “Show me others” or a bigger budget.",
+         { focus: g.seed, liked: followingSaves ? [] : state.liked });
+}
+
+function showOthers() {
+  refill(state.cards.map((_, i) => i), "We’re running out of new ideas for this profile. Try adding an interest.");
+}
+
+async function share() {
+  state.sharing = true; renderResults();
+  try {
+    const res = await fetch("/api/lists", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        person: state.meta?.person || state.query?.person || "",
+        occasion: state.query?.occasion || null,
+        items: state.saved.slice(0, 12).map(({ id, name, brand, category, image_url, price, reason }) => ({ id, name, brand, category, image_url, price, reason })),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error();
+    state.shareUrl = location.origin + data.path;
+  } catch {
+    state.flash = "Couldn’t create a share link. Try again.";
+  }
+  state.sharing = false; renderResults();
 }
 
 function reset() {
-  state.interests = []; state.result = null;
-  $("name").value = ""; $("budget").value = ""; $("interest-input").value = ""; $("pinterest-input").value = "";
-  renderChips(); renderResults();
+  Object.assign(state, { interests: [], query: null, meta: null, cards: [], shown: [], liked: [], avoid: [],
+                         saved: [], shareUrl: null, flash: null, error: null });
+  storeSaved();
+  ["name", "budget", "interest-input", "pinterest-input", "occasion", "relationship", "age"].forEach(id => $(id).value = "");
+  markPicks(); renderChips(); renderResults();
   window.scrollTo({ top: 0, behavior: "smooth" }); $("name").focus({ preventScroll: true });
 }
 
 // Clicking anywhere in a field focuses its input.
 document.querySelectorAll(".field").forEach(f =>
   f.addEventListener("click", () => $(f.dataset.for).focus()));
+
+const markPicks = () => document.querySelectorAll(".pick").forEach(l => l.classList.toggle("set", !!l.querySelector("select").value));
+document.querySelectorAll(".pick select").forEach(sel => sel.addEventListener("change", markPicks));
 
 $("interest-input").addEventListener("keydown", e => {
   const v = e.target.value.trim();
@@ -356,25 +568,31 @@ $("finder").addEventListener("submit", async e => {
   const pending = $("interest-input").value.trim();
   if (pending) { addInterests(pending); $("interest-input").value = ""; renderChips(); }
   const pinterest = $("pinterest-input").value.trim();
+  state.error = null;
   if (state.mode === "pinterest" && !pinterest) {
-    $("pinterest-input").focus();
-    state.result = { error: "Paste a link to their Pinterest profile or board." }; renderResults(); return;
+    $("pinterest-input").focus(); state.meta = null;
+    state.error = "Paste a link to their Pinterest profile or board."; renderResults(); return;
   }
   if (state.mode === "interests" && !state.interests.length) {
-    $("interest-input").focus();
-    state.result = { error: "Add at least one interest to get started." }; renderResults(); return;
+    $("interest-input").focus(); state.meta = null;
+    state.error = "Add at least one interest to get started."; renderResults(); return;
   }
-  state.loading = true; $("go").disabled = true; renderResults();
+  const budget = $("budget").value;
+  state.query = {
+    person: $("name").value.trim(),
+    ...(state.mode === "pinterest" ? { pinterest } : { interests: [...state.interests] }),
+    max_price: budget ? +budget : null,
+    occasion: $("occasion").value || null,
+    relationship: $("relationship").value || null,
+    age: $("age").value || null,
+  };
+  Object.assign(state, { cards: [], shown: [], liked: [], avoid: [], flash: null, loading: true });
+  $("go").disabled = true; renderResults();
   try {
-    const budget = $("budget").value;
-    const res = await fetch("/api/gifts", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ person: $("name").value.trim(), ...(state.mode === "pinterest" ? { pinterest } : { interests: state.interests }), max_price: budget ? +budget : null }),
-    });
-    const data = await res.json();
-    state.result = res.ok ? data : { error: data.detail || "Something went wrong." };
-  } catch {
-    state.result = { error: "Couldn’t reach the server. Is it running?" };
+    const data = await fetchPicks(3);
+    state.meta = data; state.cards = data.picks;
+  } catch (err) {
+    state.meta = null; state.error = err.message;
   }
   state.loading = false; $("go").disabled = false; renderResults();
 });
@@ -388,11 +606,17 @@ $("interest-input").addEventListener("paste", e => {
 });
 
 // Shareable links run the search on load:
-//   /?for=Mom&interests=running,hiking,flowers&budget=50  or  /?for=Mom&pinterest=jane/cozy-home
+//   /?for=Mom&interests=running,hiking,flowers&budget=50&occasion=birthday&relationship=mom
+//   /?for=Mom&pinterest=jane/cozy-home
 const params = new URLSearchParams(location.search);
 if (params.get("interests") || params.get("pinterest")) {
   $("name").value = params.get("for") || "";
   $("budget").value = params.get("budget") || "";
+  for (const id of ["occasion", "relationship", "age"]) {
+    const v = params.get(id);
+    if ([...$(id).options].some(o => o.value === v)) $(id).value = v;
+  }
+  markPicks();
   if (params.get("pinterest")) {
     setMode("pinterest"); $("pinterest-input").value = params.get("pinterest");
   } else {
@@ -401,7 +625,7 @@ if (params.get("interests") || params.get("pinterest")) {
   renderChips();
   $("finder").requestSubmit();
 } else {
-  renderChips();
+  renderChips(); renderResults();
 }
 </script>
 </body>

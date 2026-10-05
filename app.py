@@ -5,19 +5,24 @@ Run:  uv run uvicorn app:app --reload
 """
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from pathlib import Path
+from typing import Annotated, Literal
 
 import httpx
-from behaviorgpt import Search, UnboxAIClient, View
+from behaviorgpt import AddToCart, Search, UnboxAIClient, View
 from behaviorgpt._exceptions import AuthenticationError, UnboxAIError
 from behaviorgpt.types import Item
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
+import lists
+from lists import product_url
 from pinterest import PinterestError, fetch_pins, short_label
 
 load_dotenv(override=True)
@@ -32,6 +37,7 @@ MIN_MATCH_SCORE = 1.30
 # ("1,299" -> "1"), so a MacBook looks like it costs $1. Real items under this
 # can't be told apart from those, so their price is treated as unknown.
 MIN_TRUSTED_PRICE = 10.0
+PIN_CACHE_SECONDS = 600
 
 _client: UnboxAIClient | None = None
 
@@ -50,12 +56,29 @@ app = FastAPI(title="Gift Picker")
 STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
+Occasion = Literal["birthday", "christmas", "anniversary", "wedding", "housewarming", "baby shower", "thank you"]
+Relationship = Literal["partner", "mom", "dad", "friend", "coworker", "grandma", "grandpa", "sister", "brother"]
+Age = Literal["baby", "kid", "teen", "adult", "senior"]
+ProductId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,40}$")]
+
 
 class GiftRequest(BaseModel):
-    person: str = ""
+    person: str = Field("", max_length=80)
     interests: list[str] = Field(default_factory=list, max_length=8)
     pinterest: str | None = Field(None, max_length=300)
     max_price: float | None = None
+    occasion: Occasion | None = None
+    relationship: Relationship | None = None
+    age: Age | None = None
+    # Refinement: products they saved ("more like this"), products already
+    # shown or saved that shouldn't come back, and categories they waved off.
+    liked: list[ProductId] = Field(default_factory=list, max_length=12)
+    exclude: list[ProductId] = Field(default_factory=list, max_length=120)
+    avoid_categories: list[Annotated[str, StringConstraints(max_length=120)]] = Field(default_factory=list, max_length=30)
+    # Replacing a card that came from one interest or pin: draw from that same
+    # seed instead of the blended pick, so the slot keeps its theme.
+    focus: str | None = Field(None, max_length=300)
+    n: int = Field(N_PICKS, ge=1, le=N_PICKS)
 
 
 class Seed(BaseModel):
@@ -64,7 +87,26 @@ class Seed(BaseModel):
     label: str
     queries: list[str]
     reason: str
+    # Short form used to phrase occasion searches, like "golf birthday gift for
+    # dad". None for pins: their titles are often long or not in English, and
+    # "Barnerom diy housewarming gift" finds nonsense.
+    topic: str | None
     report_if_missing: bool = True
+
+
+_AGE_TERMS = {"baby": "baby", "kid": "kids", "teen": "teen", "senior": "seniors"}
+
+
+def context_phrase(req: GiftRequest) -> str:
+    """'birthday gift for dad', 'gift for teen', or '' when nothing is set.
+    A child's age says more than the relationship ("dad" of a toddler isn't
+    the recipient), so baby/kid/teen win over it."""
+    who = req.relationship or ""
+    if req.age in ("baby", "kid", "teen") or (req.age == "senior" and not who):
+        who = _AGE_TERMS[req.age]
+    if not (req.occasion or who):
+        return ""
+    return " ".join(p for p in (req.occasion, "gift", f"for {who}" if who else "") if p)
 
 
 def price_of(item: Item) -> float | None:
@@ -97,6 +139,7 @@ def interest_seed(interest: str) -> Seed:
         label=interest,
         queries=[interest, f"{interest} gift", f"{interest} accessories"],
         reason=f"For their love of {interest}",
+        topic=interest,
     )
 
 
@@ -106,15 +149,21 @@ def pin_seed(pin: str) -> Seed:
         label=pin,
         queries=[pin],
         reason=f"Because they pinned “{short_label(pin)}”",
+        topic=None,
         report_if_missing=False,
     )
+
+
+@lru_cache(maxsize=1024)
+def _search(query: str) -> tuple[Item, ...]:
+    """Plain searches never change for a catalog, so refinements reuse them."""
+    return tuple(get_client().complete(history=[Search(query)], limit=10).products.items)
 
 
 def resolve_seed(seed: Seed, max_price: float | None):
     best_query, best_hits, best_score = seed.queries[0], [], 0.0
     for query in seed.queries:
-        res = get_client().complete(history=[Search(query)], limit=10)
-        items = res.products.items
+        items = _search(query)
         if items and items[0].score > best_score:
             best_score = items[0].score
             best_query = query
@@ -144,36 +193,43 @@ def build_history(seeds: list[Seed], max_price: float | None):
     return history, matched, unmatched
 
 
-def to_card(item: Item, reason: str) -> dict:
+def to_card(item: Item, reason: str, seed: str | None = None) -> dict:
     d = item.data
+    name = d.get("name", "Unknown")
     return {
         "id": item.id,
-        "name": d.get("name", "Unknown"),
+        "name": name,
         "brand": d.get("brand"),
         "category": (d.get("categories") or "").split(",")[-1].strip() or None,
         "image_url": d.get("image_url"),
         "price": price_of(item),
         "currency": d.get("currency") or "USD",
+        "url": product_url(item.id, name),
         "score": round(item.score, 4),
         "reason": reason,
+        "seed": seed,
     }
 
 
-def pick_gifts(seeds: list[Seed], max_price: float | None):
-    history, matched, unmatched = build_history(seeds, max_price)
+def pick_gifts(seeds: list[Seed], req: GiftRequest):
+    history, matched, unmatched = build_history(seeds, req.max_price)
     if not history:
         return [], unmatched
     seen_ids = {e.product for e in history if isinstance(e, View)}
-
-    # The model's view of "what does this person want next", given everything.
-    recs = get_client().complete(history=history, limit=40).products.items
+    # Saving a product is the strongest signal we have, so it goes last. The
+    # model leans hard on the latest events, which is why only the first card
+    # follows the saves; the rest stay anchored to an interest each.
+    for pid in req.liked:
+        history += [View(pid), AddToCart(pid)]
+    ctx = context_phrase(req)
+    n = req.n
 
     picks: list[dict] = []
-    used_ids: set[str] = set()
-    used_cats: set[str] = set()
+    used_ids: set[str] = set(req.exclude) | set(req.liked)
+    used_cats: set[str] = {c.lower() for c in req.avoid_categories}
     used_stems: set[str] = set()
 
-    def take(item: Item, reason: str) -> bool:
+    def take(item: Item, reason: str, seed: str | None = None) -> bool:
         cat = category_key(item)
         # First few words of the title catch variants like "800 vs 1,700 Robux".
         stem = " ".join(item.data.get("name", "").lower().split()[:4])
@@ -181,41 +237,80 @@ def pick_gifts(seeds: list[Seed], max_price: float | None):
             return False
         if stem in used_stems:
             return False
-        if not within_budget(item, max_price):
+        if not within_budget(item, req.max_price):
             return False
-        picks.append(to_card(item, reason))
+        picks.append(to_card(item, reason, seed))
         used_ids.add(item.id)
         used_cats.add(cat)
         used_stems.add(stem)
         return True
 
-    # 1) Best blended pick: the top recommendation across all interests.
-    for item in recs:
-        if take(item, "Top match for their whole profile"):
-            break
+    def personalized(query: str, limit: int = 15) -> list[Item]:
+        return get_client().complete(history=[*history, Search(query)], limit=limit).products.items
+
+    # The model's view of "what does this person want next", given everything.
+    recs = get_client().complete(history=history, limit=40).products.items
+
+    focused = [m for m in matched if m[0].label == req.focus]
+    if focused:
+        matched = focused + [m for m in matched if m[0].label != req.focus]
+    else:
+        # 1) Best blended pick: the top recommendation across all interests.
+        lead = "More like what you saved" if req.liked else "Top match for their whole profile"
+        for item in recs:
+            if take(item, lead):
+                break
 
     # 2) Then one per seed, personalized by the full profile, so the
-    #    alternatives cover different things they love.
-    for seed, query, _ in matched:
-        if len(picks) >= N_PICKS:
-            break
-        res = get_client().complete(history=[*history, Search(query)], limit=15)
-        for item in res.products.items:
-            if take(item, seed.reason):
+    #    alternatives cover different things they love. With an occasion or
+    #    recipient set, the search says so: "golf birthday gift for dad".
+    #    Pins can't be phrased that way, so they leave the last slot for a
+    #    search on the occasion alone, still personalized by their pins.
+    #    A few spare seeds are searched in case some only repeat earlier picks.
+    occasion_slot = bool(ctx) and any(seed.topic is None for seed, _, _ in matched)
+    seed_slots = n - 1 if occasion_slot and n > 1 else n
+    candidates = matched[: n + 3]
+    with ThreadPoolExecutor(max_workers=len(candidates) + 1) as pool:
+        queries = [f"{seed.topic} {ctx}" if ctx and seed.topic else query for seed, query, _ in candidates]
+        per_seed = pool.map(personalized, queries)
+        for_occasion = pool.submit(personalized, ctx) if occasion_slot else None
+        for (seed, _, _), items in zip(candidates, per_seed):
+            if len(picks) >= seed_slots:
                 break
+            for item in items:
+                if take(item, seed.reason, seed.label):
+                    break
+        if for_occasion:
+            for item in for_occasion.result():
+                if len(picks) >= n or take(item, f"A {ctx}"):
+                    break
 
     # 3) Fill any remaining slots from the blended list, then the raw seeds.
     for item in recs:
-        if len(picks) >= N_PICKS:
+        if len(picks) >= n:
             break
         take(item, "Also fits their profile")
     for seed, _, hits in matched:
         for item in hits:
-            if len(picks) >= N_PICKS:
+            if len(picks) >= n:
                 break
-            take(item, seed.reason)
+            take(item, seed.reason, seed.label)
 
-    return picks[:N_PICKS], unmatched
+    return picks[:n], unmatched
+
+
+_pin_cache: dict[str, tuple[float, tuple]] = {}
+
+
+def cached_pins(link: str):
+    """Refining picks re-sends the same link, so keep its pins for a while."""
+    key = link.strip().lower()
+    hit = _pin_cache.get(key)
+    if hit and time.monotonic() - hit[0] < PIN_CACHE_SECONDS:
+        return hit[1]
+    result = fetch_pins(link)
+    _pin_cache[key] = (time.monotonic(), result)
+    return result
 
 
 @app.post("/api/gifts")
@@ -227,7 +322,7 @@ def gifts(req: GiftRequest):
         if interests:
             raise HTTPException(400, "Use either interests or a Pinterest link, not both.")
         try:
-            source, pins = fetch_pins(req.pinterest)
+            source, pins = cached_pins(req.pinterest)
         except PinterestError as exc:
             raise HTTPException(400, str(exc)) from exc
         pinterest = {"label": source.label, "url": source.page_url, "pins": len(pins)}
@@ -235,7 +330,7 @@ def gifts(req: GiftRequest):
     if not seeds:
         raise HTTPException(400, "Add at least one interest or a Pinterest link.")
     try:
-        picks, unmatched = pick_gifts(seeds, req.max_price)
+        picks, unmatched = pick_gifts(seeds, req)
     except AuthenticationError as exc:
         global _client
         _client = None  # pick up a fixed key on the next request
@@ -250,11 +345,20 @@ def gifts(req: GiftRequest):
         "person": req.person,
         "interests": interests,
         "pinterest": pinterest,
+        "occasion": req.occasion,
         "picks": picks,
         "unmatched": unmatched,
     }
 
 
+app.include_router(lists.router)
+
+
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")
+
+
+@app.get("/list/{list_id}")
+def list_page(list_id: str):
+    return FileResponse(STATIC / "list.html")

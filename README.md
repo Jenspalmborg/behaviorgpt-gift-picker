@@ -1,6 +1,8 @@
 # Gift Picker
 
-Tell it what someone loves ("running, hiking, flowers") and get three gift ideas, picked by [BehaviorGPT](https://github.com/Unbox-AI/behaviorgpt). The interests are played to the model as a short shopping session, and the model predicts what that person would reach for next.
+Tell it what someone loves ("running, hiking, flowers"), or paste their Pinterest profile, and get three gift ideas picked by [BehaviorGPT](https://github.com/Unbox-AI/behaviorgpt). The interests are played to the model as a short shopping session, and the model predicts what that person would reach for next. Save the ideas you like to get more like them, then share a shortlist so others can vote.
+
+Every recommendation comes from BehaviorGPT. There is no LLM in the loop.
 
 ![Gift ideas for Mom: running, hiking, flowers](docs/screenshots/picks.png)
 
@@ -16,6 +18,10 @@ It is a small, complete example of building on the BehaviorGPT SDK: no catalog t
 | Turning interests into a profile | `Search` + `View` events, one pair per interest |
 | "Top match for their whole profile" | `complete` with the profile, ending on a `View` (recommendations) |
 | "For their love of …" | `complete` with the profile plus a final `Search` (personalized search) |
+| Pinterest import | each recent pin's title becomes a `Search` + `View` pair, newest pins last |
+| Occasion and recipient | the per-interest search says it: `Search("golf birthday gift for dad")` |
+| ♥ Save, more like this | `View` + `AddToCart` of the saved product appended to the profile |
+| ✕ Not for them | same call, with that product and its category excluded |
 
 ## Run it
 
@@ -29,7 +35,9 @@ cp .env.example .env                # paste your key as UNBOXAI_API_KEY
 uv run uvicorn app:app --reload
 ```
 
-Open http://127.0.0.1:8000. Links like `/?for=Mom&interests=running,hiking,flowers&budget=50` fill in the form and run the search, which is handy for sharing examples.
+Open http://127.0.0.1:8000. Links like `/?for=Mom&interests=running,hiking,flowers&budget=50&occasion=birthday&relationship=mom` (or `/?for=Jane&pinterest=jane/cozy-home`) fill in the form and run the search, which is handy for sharing examples.
+
+Shared shortlists are stored in SQLite at `data/gift-picker.db`; set `GIFT_DB` to put it elsewhere.
 
 ## How it works
 
@@ -43,14 +51,24 @@ Open http://127.0.0.1:8000. Links like `/?for=Mom&interests=running,hiking,flowe
    The views matter: they tell the model which kind of product in each area this person looked at, not just the words.
 3. **Ask for picks.** The top pick comes from the session as is ("what would they want next?"). The other two add one more `Search` for a single interest at the end, so the results are ranked for someone who also likes everything else.
 4. **Keep them different.** Picks skip the products already "viewed" in the session, anything over budget, and items too close to an earlier pick (same leaf category or same first words of the title).
+5. **Refine.** Saving a card adds `View` + `AddToCart` of it at the end of the session. The model leans hard on the latest events (one saved kettle turns every result into kettles), so only that card's slot follows the saves, as "More like what you saved"; the others stay tied to one interest each. ✕ replaces a card from the same interest, avoiding its category. "Show me others" asks again while excluding everything already shown.
 
-The name is only used for the heading, and the budget is a filter applied after the model call. Gender and age are not sent, although the SDK's `Domains` supports them.
+**Pinterest.** Public profiles and boards have RSS feeds (`/<user>/feed.rss`, `/<user>/<board>.rss`), so no login or API key is needed. Many personal pins have no caption; for those the title of the pin's own page is used ("Diy dinosaur play house | Dinosaur dollhouse, …"). Pin titles are searched as written. With an occasion set, the last card searches the occasion alone ("housewarming gift"), still personalized by the pins, because phrases like "Barnerom diy housewarming gift" find nonsense.
+
+**Occasion, relationship and age** only shape the search wording: "birthday gift for dad" on its own returns generic gift-shop items, but "golf birthday gift for dad" returns golf gifts. A child's age wins over the relationship ("gift for kids").
+
+**Prices.** The catalog stores prices of $1,000 and up as only their thousands digit (a MacBook is `"1"`), so prices under $10 are treated as unknown, and with a budget set, items without a trusted price are left out.
+
+The name is only used for the heading. The SDK's `Domains` has `age_group` and `gender`, but they're set once per client and their values aren't documented, so they aren't used yet.
 
 ## Layout
 
 ```
-app.py              FastAPI backend: builds the history, calls BehaviorGPT, picks 3 gifts
-static/index.html   the page (plain HTML, CSS and JS, no build step)
+app.py              FastAPI backend: builds the history, calls BehaviorGPT, picks gifts
+pinterest.py        reads recent pins from a public Pinterest profile or board
+lists.py            shareable shortlists and votes (SQLite)
+static/index.html   the main page (plain HTML, CSS and JS, no build step)
+static/list.html    the shared shortlist page at /list/<id>
 docs/screenshots/   README images
 ```
 
@@ -61,7 +79,10 @@ docs/screenshots/   README images
 - The retail catalog is patchy: some interests need more specific wording ("gaming headset" rather than "video games").
 - Three slots and one top pick means a third interest can get squeezed out.
 - Near-duplicates from different sellers (two V-Bucks cards) can still slip through.
-- "Find it" opens an Amazon search for the product name, since the catalog has no product links.
+- Pins about recipes or articles map to groceries or unrelated products; boards of things work much better than boards of ideas. Pins in other languages match less well against the English catalog.
+- Items over $10,000 can still slip under a budget (a Rolex stored as `"19"`), until the catalog's prices are fixed.
+- "Find it" links straight to the Amazon product, since catalog ids are `pa` + the ASIN; other ids fall back to an Amazon search.
+- Votes on shared lists aren't tied to accounts: one per browser, easy to game.
 
 ## License
 
