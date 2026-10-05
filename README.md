@@ -21,7 +21,7 @@ It is a small, complete example of building on the BehaviorGPT SDK: no catalog t
 | Pinterest import | each recent pin's title becomes a `Search` + `View` pair, newest pins last |
 | Occasion and recipient | the per-interest search says it: `Search("golf birthday gift for dad")` |
 | ♥ Save, more like this | `View` + `AddToCart` of the saved product appended to the profile |
-| ✕ Not for them | same call, with that product and its category excluded |
+| ✕ Not for them | same call, with that product and its near-copies excluded |
 
 ## Run it
 
@@ -39,6 +39,12 @@ Open http://127.0.0.1:8000. Links like `/?for=Mom&interests=running,hiking,flowe
 
 Shared shortlists are stored in SQLite at `data/gift-picker.db`; set `GIFT_DB` to put it elsewhere.
 
+Tests run offline against a small fake catalog, so they need no API key:
+
+```sh
+uv run pytest
+```
+
 ## How it works
 
 1. **Pick the wording.** Broad words land badly on their own: in this catalog "video games" returns Nike sneakers and "gold jewelry" returns coffee. So each interest is searched as `X`, `X gift` and `X accessories`, and the phrasing whose top result the model is most confident about wins. If even the best score is below `MIN_MATCH_SCORE`, the interest is skipped and the page says so.
@@ -51,7 +57,7 @@ Shared shortlists are stored in SQLite at `data/gift-picker.db`; set `GIFT_DB` t
    The views matter: they tell the model which kind of product in each area this person looked at, not just the words.
 3. **Ask for picks.** The top pick comes from the session as is ("what would they want next?"). The other two add one more `Search` for a single interest at the end, so the results are ranked for someone who also likes everything else.
 4. **Keep them different.** Picks skip the products already "viewed" in the session, anything over budget, and items too close to an earlier pick (same leaf category or same first words of the title).
-5. **Refine.** Saving a card adds `View` + `AddToCart` of it at the end of the session. The model leans hard on the latest events (one saved kettle turns every result into kettles), so only that card's slot follows the saves, as "More like what you saved"; the others stay tied to one interest each. ✕ replaces a card from the same interest, avoiding its category. "Show me others" asks again while excluding everything already shown.
+5. **Refine.** Saving a card adds `View` + `AddToCart` of it at the end of the session. The model leans hard on the latest events (one saved kettle turns every result into kettles), so only that card's slot follows the saves, as "More like what you saved"; the others stay tied to one interest each. ✕ replaces a card from the same interest, skipping near-copies of it (same first words of the title, usually the same brand and line) for the rest of the session. "Show me others" asks again while excluding everything already shown.
 
 **Pinterest.** Public profiles and boards have RSS feeds (`/<user>/feed.rss`, `/<user>/<board>.rss`), so no login or API key is needed. Many personal pins have no caption; for those the title of the pin's own page is used ("Diy dinosaur play house | Dinosaur dollhouse, …"). Pin titles are searched as written. With an occasion set, the last card searches the occasion alone ("housewarming gift"), still personalized by the pins, because phrases like "Barnerom diy housewarming gift" find nonsense.
 
@@ -71,6 +77,7 @@ pinterest.py        reads recent pins from a public Pinterest profile or board
 lists.py            shareable shortlists and votes (SQLite)
 static/index.html   the main page (plain HTML, CSS and JS, no build step)
 static/list.html    the shared shortlist page at /list/<id>
+tests/              pytest suite; BehaviorGPT and Pinterest are faked
 docs/screenshots/   README images
 ```
 

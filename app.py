@@ -70,10 +70,11 @@ class GiftRequest(BaseModel):
     occasion: Occasion | None = None
     age: Age | None = None
     # Refinement: products they saved ("more like this"), products already
-    # shown or saved that shouldn't come back, and categories they waved off.
+    # shown or saved that shouldn't come back, and names of products whose
+    # near-copies shouldn't either (ones waved off, ones still on screen).
     liked: list[ProductId] = Field(default_factory=list, max_length=12)
     exclude: list[ProductId] = Field(default_factory=list, max_length=120)
-    avoid_categories: list[Annotated[str, StringConstraints(max_length=120)]] = Field(default_factory=list, max_length=30)
+    avoid_similar: list[Annotated[str, StringConstraints(max_length=300)]] = Field(default_factory=list, max_length=40)
     # Replacing a card that came from one interest or pin: draw from that same
     # seed instead of the blended pick, so the slot keeps its theme.
     focus: str | None = Field(None, max_length=300)
@@ -170,6 +171,12 @@ def within_budget(item: Item, max_price: float | None) -> bool:
         return True
     price = price_of(item)
     return price is not None and price <= max_price
+
+
+def name_stem(name: str) -> str:
+    """First words of a title, which are usually the brand and product line:
+    "BBQ Grill Tools Set Gift for Dad" and "BBQ Grill Tools Set, 20 Pcs" match."""
+    return " ".join(re.findall(r"\w+", name.lower())[:3])
 
 
 def category_key(item: Item) -> str:
@@ -273,13 +280,15 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
 
     picks: list[dict] = []
     used_ids: set[str] = set(req.exclude) | set(req.liked)
-    used_cats: set[str] = {c.lower() for c in req.avoid_categories}
-    used_stems: set[str] = set()
+    # Categories are broad ("Sports & Outdoors"), so they only keep the picks
+    # within one response apart; across refinements, near-copies are avoided.
+    used_cats: set[str] = set()
+    used_stems: set[str] = {name_stem(n) for n in req.avoid_similar}
 
     def take(item: Item, reason: str, seed: str | None = None) -> bool:
         cat = category_key(item)
-        # First few words of the title catch variants like "800 vs 1,700 Robux".
-        stem = " ".join(item.data.get("name", "").lower().split()[:4])
+        # Catches variants like "800 vs 1,700 Robux" and the same set from one brand.
+        stem = name_stem(item.data.get("name", ""))
         if item.id in used_ids or item.id in seen_ids or cat in used_cats:
             return False
         if stem in used_stems:

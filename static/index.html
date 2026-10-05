@@ -459,11 +459,13 @@ function bind() {
   });
 }
 
-async function fetchPicks(n, { focus = null, liked = state.liked } = {}) {
+async function fetchPicks(n, { focus = null, liked = state.liked, keep = [] } = {}) {
   const exclude = [...new Set([...state.shown, ...state.saved.map(g => g.id)])].slice(-120);
+  // No near-copies of what they waved off, or of the cards staying on screen.
+  const avoid_similar = [...state.avoid.slice(-30), ...keep.map(g => g.name)];
   const res = await fetch("/api/gifts", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...state.query, n, focus, liked, exclude, avoid_categories: state.avoid.slice(-30) }),
+    body: JSON.stringify({ ...state.query, n, focus, liked, exclude, avoid_similar }),
   }).catch(() => { throw new Error("Couldn’t reach the server. Is it running?"); });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Something went wrong.");
@@ -472,10 +474,11 @@ async function fetchPicks(n, { focus = null, liked = state.liked } = {}) {
 }
 
 // Replace the cards in `slots` with fresh picks; slots with no new pick are dropped.
-async function refill(slots, emptyMessage, options) {
+async function refill(slots, emptyMessage, options = {}) {
   slots.forEach(i => state.busy.add(i)); state.flash = null; renderResults();
+  const keep = state.cards.filter((_, i) => !slots.includes(i));
   try {
-    const { picks } = await fetchPicks(slots.length, options);
+    const { picks } = await fetchPicks(slots.length, { ...options, keep });
     slots.forEach((i, k) => { state.cards[i] = picks[k] ?? null; });
     if (picks.length < slots.length) state.flash = emptyMessage;
   } catch (err) {
@@ -498,7 +501,7 @@ const SAVED_REASON = "More like what you saved";
 
 function nope(i) {
   const g = state.cards[i];
-  if (g.category && !state.avoid.includes(g.category)) state.avoid.push(g.category);
+  if (!state.avoid.includes(g.name)) state.avoid.push(g.name);
   // A card from one interest is replaced from that interest. Otherwise it's the
   // blended slot: follow the saves, unless another card already does.
   const followingSaves = state.cards.some((c, k) => k !== i && c.reason === SAVED_REASON);
