@@ -18,6 +18,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from pinterest import PinterestError, fetch_pins, short_label
+
 load_dotenv(override=True)
 
 CATALOG_ID = os.environ.get("GIFT_CATALOG_ID", "retail_catalog")
@@ -26,6 +28,10 @@ N_PICKS = 3
 # Below this top score, search results are usually unrelated to the query
 # (the catalog has nothing for it), so the interest is skipped.
 MIN_MATCH_SCORE = 1.30
+# The catalog stores prices of $1,000 and up as just their thousands digit
+# ("1,299" -> "1"), so a MacBook looks like it costs $1. Real items under this
+# can't be told apart from those, so their price is treated as unknown.
+MIN_TRUSTED_PRICE = 10.0
 
 _client: UnboxAIClient | None = None
 
@@ -47,22 +53,34 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 class GiftRequest(BaseModel):
     person: str = ""
-    interests: list[str] = Field(min_length=1, max_length=8)
+    interests: list[str] = Field(default_factory=list, max_length=8)
+    pinterest: str | None = Field(None, max_length=300)
     max_price: float | None = None
+
+
+class Seed(BaseModel):
+    """One thing we know they like: a typed interest or a pin."""
+
+    label: str
+    queries: list[str]
+    reason: str
+    report_if_missing: bool = True
 
 
 def price_of(item: Item) -> float | None:
     try:
-        return float(item.extract_price(MARKET))
+        price = float(item.extract_price(MARKET))
     except (TypeError, ValueError):
         return None
+    return price if price >= MIN_TRUSTED_PRICE else None
 
 
 def within_budget(item: Item, max_price: float | None) -> bool:
+    """With a budget set, only items with a price we trust are kept."""
     if max_price is None:
         return True
     price = price_of(item)
-    return price is None or price <= max_price
+    return price is not None and price <= max_price
 
 
 def category_key(item: Item) -> str:
@@ -72,11 +90,29 @@ def category_key(item: Item) -> str:
     return leaf or item.data.get("brand", "") or item.id
 
 
-def resolve_interest(interest: str, max_price: float | None):
+def interest_seed(interest: str) -> Seed:
     """Broad words like "video games" can land on unrelated products, so try a
     few phrasings and keep the one the model is most confident about."""
-    best_query, best_hits, best_score = interest, [], 0.0
-    for query in (interest, f"{interest} gift", f"{interest} accessories"):
+    return Seed(
+        label=interest,
+        queries=[interest, f"{interest} gift", f"{interest} accessories"],
+        reason=f"For their love of {interest}",
+    )
+
+
+def pin_seed(pin: str) -> Seed:
+    """Pin titles are already descriptive, so they're searched as written."""
+    return Seed(
+        label=pin,
+        queries=[pin],
+        reason=f"Because they pinned “{short_label(pin)}”",
+        report_if_missing=False,
+    )
+
+
+def resolve_seed(seed: Seed, max_price: float | None):
+    best_query, best_hits, best_score = seed.queries[0], [], 0.0
+    for query in seed.queries:
         res = get_client().complete(history=[Search(query)], limit=10)
         items = res.products.items
         if items and items[0].score > best_score:
@@ -86,20 +122,24 @@ def resolve_interest(interest: str, max_price: float | None):
     return best_query, best_hits, best_score
 
 
-def build_history(interests: list[str], max_price: float | None):
-    """Each interest becomes a search followed by a view of its best match,
-    as if the person had browsed a store for the things they love."""
-    with ThreadPoolExecutor(max_workers=len(interests)) as pool:
-        resolved = list(pool.map(lambda i: resolve_interest(i, max_price), interests))
+def build_history(seeds: list[Seed], max_price: float | None):
+    """Each seed becomes a search followed by a view of its best match, as if
+    the person had browsed a store for the things they love. Seeds come in
+    priority order; the history replays them in reverse so the strongest
+    signals are the most recent events."""
+    with ThreadPoolExecutor(max_workers=min(len(seeds), 12)) as pool:
+        resolved = list(pool.map(lambda s: resolve_seed(s, max_price), seeds))
 
     history = []
-    matched: dict[str, tuple[str, list[Item]]] = {}
+    matched: list[tuple[Seed, str, list[Item]]] = []
     unmatched: list[str] = []
-    for interest, (query, hits, score) in zip(interests, resolved):
+    for seed, (query, hits, score) in zip(seeds, resolved):
         if score < MIN_MATCH_SCORE or not hits:
-            unmatched.append(interest)
+            if seed.report_if_missing:
+                unmatched.append(seed.label)
             continue
-        matched[interest] = (query, hits)
+        matched.append((seed, query, hits))
+    for _, query, hits in reversed(matched):
         history += [Search(query), View(hits[0].id)]
     return history, matched, unmatched
 
@@ -119,8 +159,8 @@ def to_card(item: Item, reason: str) -> dict:
     }
 
 
-def pick_gifts(interests: list[str], max_price: float | None):
-    history, matched, unmatched = build_history(interests, max_price)
+def pick_gifts(seeds: list[Seed], max_price: float | None):
+    history, matched, unmatched = build_history(seeds, max_price)
     if not history:
         return [], unmatched
     seen_ids = {e.product for e in history if isinstance(e, View)}
@@ -154,14 +194,14 @@ def pick_gifts(interests: list[str], max_price: float | None):
         if take(item, "Top match for their whole profile"):
             break
 
-    # 2) Then one per interest, personalized by the full profile, so the
+    # 2) Then one per seed, personalized by the full profile, so the
     #    alternatives cover different things they love.
-    for interest, (query, _) in matched.items():
+    for seed, query, _ in matched:
         if len(picks) >= N_PICKS:
             break
         res = get_client().complete(history=[*history, Search(query)], limit=15)
         for item in res.products.items:
-            if take(item, f"For their love of {interest}"):
+            if take(item, seed.reason):
                 break
 
     # 3) Fill any remaining slots from the blended list, then the raw seeds.
@@ -169,11 +209,11 @@ def pick_gifts(interests: list[str], max_price: float | None):
         if len(picks) >= N_PICKS:
             break
         take(item, "Also fits their profile")
-    for interest, (_, hits) in matched.items():
+    for seed, _, hits in matched:
         for item in hits:
             if len(picks) >= N_PICKS:
                 break
-            take(item, f"For their love of {interest}")
+            take(item, seed.reason)
 
     return picks[:N_PICKS], unmatched
 
@@ -181,10 +221,21 @@ def pick_gifts(interests: list[str], max_price: float | None):
 @app.post("/api/gifts")
 def gifts(req: GiftRequest):
     interests = [i.strip() for i in req.interests if i.strip()]
-    if not interests:
-        raise HTTPException(400, "Add at least one interest.")
+    pinterest = None
+    seeds = [interest_seed(i) for i in interests]
+    if req.pinterest and req.pinterest.strip():
+        if interests:
+            raise HTTPException(400, "Use either interests or a Pinterest link, not both.")
+        try:
+            source, pins = fetch_pins(req.pinterest)
+        except PinterestError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        pinterest = {"label": source.label, "url": source.page_url, "pins": len(pins)}
+        seeds += [pin_seed(p) for p in pins]
+    if not seeds:
+        raise HTTPException(400, "Add at least one interest or a Pinterest link.")
     try:
-        picks, unmatched = pick_gifts(interests, req.max_price)
+        picks, unmatched = pick_gifts(seeds, req.max_price)
     except AuthenticationError as exc:
         global _client
         _client = None  # pick up a fixed key on the next request
@@ -198,6 +249,7 @@ def gifts(req: GiftRequest):
     return {
         "person": req.person,
         "interests": interests,
+        "pinterest": pinterest,
         "picks": picks,
         "unmatched": unmatched,
     }
