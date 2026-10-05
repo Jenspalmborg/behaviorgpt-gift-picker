@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as gift_app
-from app import GiftRequest, context_phrase, fits_age, name_stem, price_of, within_budget
+from app import GiftRequest, context_phrase, fits_age, giftable, name_words, near_copy, price_of, within_budget
 from conftest import CATALOG, FakeClient, make_item
 
 client = TestClient(gift_app.app)
@@ -42,11 +42,25 @@ def test_age_filter_uses_category_or_name():
     assert fits_age(item("Omega Seamaster Golf Edition Watch"), None)
 
 
-def test_name_stem_matches_the_same_product_line():
-    assert name_stem("Acme Golf Balls 12 Pack") == name_stem("Acme Golf Balls 24 Pack")
-    assert name_stem("BBQ Grill Tools Set Gift for Dad") == name_stem("BBQ, Grill Tools: 20 pcs")
-    assert name_stem("Acme Golf Balls") != name_stem("Birdie Golf Ball Marker")
-    assert name_stem("Borla 140597 Cat-Back Exhaust") == name_stem("BORLA 140753 Cat-Back Perf. Exhaust")
+@pytest.mark.parametrize("a, b, same", [
+    ("Acme Golf Balls 12 Pack", "Acme Golf Balls 24 Pack", True),
+    ("MASTER FENG Sausage Stuffer, Stainless Steel", "Sausage Stuffer - Stainless Steel Homemade", True),
+    ("Borla 140597 Cat-Back Exhaust", "BORLA 140753 Cat-Back Perf. Exhaust", True),
+    ("Acme Golf Balls 12 Pack", "Birdie Golf Ball Marker", False),
+    ("Callaway Golf 2021 Supersoft Golf Balls", "Personalised Golf Balls and Tees Gift Set", False),
+])
+def test_near_copies_match_in_any_word_order(a, b, same):
+    assert near_copy(name_words(a), name_words(b)) is same
+
+
+def test_groceries_and_supplies_only_count_as_gifts_when_sold_as_one():
+    def thing(name, category):
+        return make_item(("x", name, category, "20"))
+    assert not giftable(thing("Ball Park Frozen Beef Patties", "Grocery & Gourmet Food"))
+    assert not giftable(thing("Rubber Stair Treads Non-Slip", "Tools & Home Improvement"))
+    assert giftable(thing("The Bon Appetit Gourmet Gift Basket", "Grocery & Gourmet Food"))
+    assert giftable(thing("Craftsman 230-Piece Tool Set", "Tools & Home Improvement"))
+    assert giftable(thing("Pour Over Coffee Kettle", "Home & Kitchen"))
 
 
 def test_product_url_links_the_asin():
@@ -198,6 +212,9 @@ def test_theme_seed_tries_each_topic_as_gift_and_accessories():
     assert seed.queries == ["prague", "prague gift", "prague accessories",
                             "places to travel", "places to travel gift", "places to travel accessories"]
     assert gift_app.reason_for(seed, "places to travel accessories") == "For their love of places to travel"
+    watches = gift_app.theme_seed(Board("Watches", 15, ("luxury watches", "mens accessories")))
+    assert gift_app.topic_of(watches, "mens accessories") == "mens accessories"
+    assert gift_app.topic_of(watches, "mens accessories gift") == "mens accessories"
 
 
 def test_top_match_counts_as_its_boards_card(fake_client):
@@ -208,3 +225,36 @@ def test_top_match_counts_as_its_boards_card(fake_client):
     assert gift_app.closest_group(watch, matched) == "golf"
     kettle = make_item(rows["Pour Over Coffee Kettle"])
     assert gift_app.closest_group(kettle, matched) == "coffee"
+
+
+def test_theme_prefers_a_phrasing_that_fits_the_rest_of_the_board():
+    from pinterest import Board
+
+    def result(name, category, score):
+        return (make_item(("x" + name[:5], name, category, "20"), score),)
+    seed = gift_app.theme_seed(Board("Inspo", 1, ("stairs", "furniture", "home decor")))
+    results = {q: () for q in seed.queries}
+    results["stairs accessories"] = result("Rubber Stair Treads", "Tools & Home Improvement", 1.44)
+    results["furniture"] = result("Sofa", "Home & Kitchen", 1.39)
+    results["home decor accessories"] = result("Table Fountain", "Home & Kitchen", 1.42)
+    query, score = gift_app.best_query(seed, results, set())
+    assert query == "home decor accessories" and score == 1.42
+    # On its own merits (no fit bonus), stairs would have won.
+    assert gift_app.best_query(gift_app.interest_seed("stairs"), {"stairs": results["stairs accessories"],
+                               "stairs gift": (), "stairs accessories": ()}, set())[0] == "stairs"
+
+
+def test_top_match_is_on_topic_and_giftable(monkeypatch):
+    class OffTopicRecs(FakeClient):
+        """Recommendations (no final search) lead with a stray grocery item."""
+        def complete(self, history, limit=10, **kw):
+            res = super().complete(history, limit, **kw)
+            if type(history[-1]).__name__ != "Search":
+                res.products.items = [make_item(("paX", "Olive Hummus 10 Oz", "Grocery & Gourmet Food", "4"), 1.9),
+                                      *res.products.items]
+            return res
+    monkeypatch.setattr(gift_app, "_client", OffTopicRecs())
+    gift_app._search.cache_clear()
+    d = gifts(interests=["golf", "coffee"])
+    assert d["picks"][0]["reason"] == "Top match for their whole profile"
+    assert "Hummus" not in d["picks"][0]["name"]

@@ -7,6 +7,7 @@ Run:  uv run uvicorn app:app --reload
 import os
 import re
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
@@ -39,6 +40,9 @@ MIN_MATCH_SCORE = 1.30
 # can't be told apart from those, so their price is treated as unknown.
 MIN_TRUSTED_PRICE = 10.0
 PIN_CACHE_SECONDS = 600
+# How much a board theme's fit with the rest of the board counts next to the
+# model's own score (which spans roughly 1.30-1.52 for useful matches).
+THEME_FIT_WEIGHT = 0.1
 
 _client: UnboxAIClient | None = None
 
@@ -97,6 +101,9 @@ class Seed(BaseModel):
     # Pins only add to the history; interests and themes also get cards,
     # since their wording is a topic ("fixie bike") rather than a caption.
     reason: str = ""
+    # Themes: Pinterest's topics, each searched as is, as a gift and as
+    # accessories (the queries above).
+    topics: list[str] = []
 
 
 _SUFFIXES = (" gift", " accessories")
@@ -108,9 +115,11 @@ def topic_of(seed: Seed, query: str) -> str | None:
     English, and "Barnerom diy housewarming gift" finds nonsense."""
     if seed.kind == "pin":
         return None
-    for suffix in _SUFFIXES:
-        if query.endswith(suffix):
-            return query.removesuffix(suffix)
+    # Matched against the seed's own topics, since a topic can itself end in
+    # a suffix: "mens accessories" is one of Pinterest's watch topics.
+    for topic in seed.topics or [seed.label]:
+        if query == topic or any(query == topic + suffix for suffix in _SUFFIXES):
+            return topic
     return query
 
 
@@ -169,12 +178,42 @@ def within_budget(item: Item, max_price: float | None) -> bool:
     return price is not None and price <= max_price
 
 
-def name_stem(name: str) -> str:
-    """First words of a title, which are usually the brand and product line:
-    "BBQ Grill Tools Set Gift for Dad" and "BBQ Grill Tools Set, 20 Pcs" match.
-    Words with digits are skipped, so "Borla 140597 Cat-Back" and "BORLA 140753
-    Cat-Back" match too."""
-    return " ".join([w for w in re.findall(r"\w+", name.lower()) if not any(c.isdigit() for c in w)][:3])
+_STOPWORDS = {"with", "for", "and", "the", "set", "pack", "pcs", "piece", "gift", "gifts",
+              "men", "women", "mens", "womens", "from", "your", "you", "new"}
+
+
+def _words(name: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]{3,}", name.lower()) if w not in _STOPWORDS}
+
+
+def name_words(name: str) -> set[str]:
+    """The main words at the start of a title, where brand and product type sit."""
+    return _words(" ".join(name.split()[:8]))
+
+
+def near_copy(a: set[str], b: set[str]) -> bool:
+    """Same kind of product, in any word order: "MASTER FENG Sausage Stuffer,
+    Stainless Steel" and "Sausage Stuffer - Stainless Steel Homemade" share
+    four main words. Golf balls and a golf ball marker share only "golf"."""
+    shared = len(a & b)
+    return shared >= 2 and shared >= min(3, len(a), len(b))
+
+
+# Groceries, household supplies and repair parts make poor gifts (frozen
+# patties, motion-sickness patches, stair treads), unless sold as a gift.
+_LOW_GIFT_CATEGORIES = {"grocery & gourmet food", "health & household", "household supplies",
+                        "tools & home improvement"}
+_GIFT_WORDS = re.compile(r"\b(gifts?|baskets?|hampers?|box|sets?|kits?|sampler|collection)\b", re.I)
+
+
+def giftable(item: Item) -> bool:
+    category = (item.data.get("categories") or "").strip().lower()
+    return category not in _LOW_GIFT_CATEGORIES or bool(_GIFT_WORDS.search(item.data.get("name", "")))
+
+
+def gifts_first(items) -> list[Item]:
+    """Same order, giftable products ahead of the rest."""
+    return sorted(items, key=lambda i: not giftable(i))
 
 
 def category_key(item: Item) -> str:
@@ -205,6 +244,7 @@ def theme_seed(board: Board) -> Seed:
         label=board.name,
         queries=[q for t in board.topics for q in (t, *(t + s for s in _SUFFIXES))],
         group=board.name,
+        topics=list(board.topics),
     )
 
 
@@ -225,15 +265,38 @@ def _search(query: str) -> tuple[Item, ...]:
     return tuple(get_client().complete(history=[Search(query)], limit=10).products.items)
 
 
-def resolve_seed(seed: Seed, max_price: float | None):
-    best_query, best_hits, best_score = seed.queries[0], [], 0.0
-    for query in seed.queries:
-        items = _search(query)
-        if items and items[0].score > best_score:
-            best_score = items[0].score
-            best_query = query
-            best_hits = [i for i in items if within_budget(i, max_price)]
-    return best_query, best_hits, best_score
+_SEARCH_POOL = ThreadPoolExecutor(max_workers=24)
+
+
+def best_query(seed: Seed, results: dict[str, tuple[Item, ...]], board_cats: set) -> tuple[str, float]:
+    """The phrasing to use for a seed, and its score. For interests and pins,
+    the one the model is most confident about. For a board theme, that score
+    plus how well the phrasing fits the rest of the board: the share of its
+    other topics (and of its pins' matches) whose results include the same
+    category. Inspo's topics agree on Home & Kitchen, so "home decor" beats
+    the slightly higher-scoring but lone "stairs" (stair treads)."""
+    def score(q):
+        return results[q][0].score if results.get(q) else 0.0
+
+    if seed.kind != "theme":
+        q = max(seed.queries, key=score)
+        return q, score(q)
+
+    cats_by_topic = {
+        t: {i.data.get("categories") for v in (t, *(t + s for s in _SUFFIXES)) for i in results.get(v, ())[:5]}
+        for t in seed.topics
+    }
+
+    def fit(q):
+        if not results.get(q):
+            return 0.0
+        topic = topic_of(seed, q)
+        top_cat = results[q][0].data.get("categories")
+        others = [c for t, c in cats_by_topic.items() if t != topic] + ([board_cats] if board_cats else [])
+        return sum(top_cat in c for c in others) / len(others) if others else 0.0
+
+    q = max(seed.queries, key=lambda q: score(q) + THEME_FIT_WEIGHT * fit(q))
+    return q, score(q)
 
 
 def build_history(seeds: list[Seed], max_price: float | None):
@@ -241,13 +304,22 @@ def build_history(seeds: list[Seed], max_price: float | None):
     the person had browsed a store for the things they love. Seeds come in
     priority order; the history replays them in reverse so the strongest
     signals are the most recent events."""
-    with ThreadPoolExecutor(max_workers=min(len(seeds), 12)) as pool:
-        resolved = list(pool.map(lambda s: resolve_seed(s, max_price), seeds))
+    queries = list(dict.fromkeys(q for seed in seeds for q in seed.queries))
+    results = dict(zip(queries, _SEARCH_POOL.map(_search, queries)))
+
+    # What each board's pins matched, for judging its theme's phrasings.
+    board_cats: dict[str, set] = defaultdict(set)
+    for seed in seeds:
+        items = results[seed.queries[0]]
+        if seed.kind == "pin" and items and items[0].score >= MIN_MATCH_SCORE:
+            board_cats[seed.group] |= {i.data.get("categories") for i in items[:3]}
 
     history = []
     matched: list[tuple[Seed, str, list[Item]]] = []
     unmatched: list[str] = []
-    for seed, (query, hits, score) in zip(seeds, resolved):
+    for seed in seeds:
+        query, score = best_query(seed, results, board_cats[seed.group])
+        hits = [i for i in results[query] if within_budget(i, max_price)]
         if score < MIN_MATCH_SCORE or not hits:
             if seed.kind == "interest":
                 unmatched.append(seed.label)
@@ -274,13 +346,6 @@ def to_card(item: Item, reason: str, group: str | None = None) -> dict:
         "reason": reason,
         "group": group,
     }
-
-
-_STOPWORDS = {"with", "for", "and", "the", "set", "pack", "gift", "gifts", "men", "women", "mens", "womens"}
-
-
-def _words(name: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z]{4,}", name.lower()) if w not in _STOPWORDS}
 
 
 def closest_group(item: Item, matched) -> str | None:
@@ -327,22 +392,21 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
     # Categories are broad ("Sports & Outdoors"), so they only keep the picks
     # within one response apart; across refinements, near-copies are avoided.
     used_cats: set[str] = set()
-    used_stems: set[str] = {name_stem(n) for n in req.avoid_similar}
+    used_names: list[set[str]] = [name_words(n) for n in req.avoid_similar]
 
     def take(item: Item, reason: str, group: str | None = None) -> bool:
         cat = category_key(item)
-        # Catches variants like "800 vs 1,700 Robux" and the same set from one brand.
-        stem = name_stem(item.data.get("name", ""))
+        words = name_words(item.data.get("name", ""))
         if item.id in used_ids or item.id in seen_ids or cat in used_cats:
             return False
-        if stem in used_stems:
+        if any(near_copy(words, used) for used in used_names):
             return False
         if not within_budget(item, req.max_price) or not fits_age(item, req.age):
             return False
         picks.append(to_card(item, reason, group))
         used_ids.add(item.id)
         used_cats.add(cat)
-        used_stems.add(stem)
+        used_names.append(words)
         return True
 
     def personalized(query: str, limit: int = 15) -> list[Item]:
@@ -355,8 +419,13 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
     if not any(m[0].group == req.focus for m in matched):
         # 1) Best blended pick: the top recommendation across all interests.
         #    It counts as the card for whichever interest or board it's from.
+        #    Like the other cards it has to be on topic: from a category that
+        #    one of their interests or themes returns (pins only if that's all
+        #    there is), which keeps out stray carpet grippers and hummus.
         lead = "More like what you saved" if req.liked else "Top match for their whole profile"
-        for item in recs:
+        topical = [m for m in matched if m[0].kind != "pin"] or matched
+        on_topic = {i.data.get("categories") for _, query, _ in topical for i in _search(query)}
+        for item in gifts_first(i for i in recs if i.data.get("categories") in on_topic):
             if take(item, lead):
                 group = closest_group(item, matched)
                 picks[-1]["group"] = group
@@ -393,21 +462,21 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
             if len(picks) >= seed_slots:
                 break
             on_topic = {i.data.get("categories") for i in _search(query)}
-            for item in [*(i for i in items if i.data.get("categories") in on_topic), *hits]:
+            for item in gifts_first([*(i for i in items if i.data.get("categories") in on_topic), *hits]):
                 if take(item, reason_for(seed, query), seed.group):
                     break
         if for_occasion:
-            for item in for_occasion.result():
+            for item in gifts_first(for_occasion.result()):
                 if len(picks) >= n or take(item, f"A {ctx}"):
                     break
 
     # 3) Fill any remaining slots from the blended list, then the raw seeds.
-    for item in recs:
+    for item in gifts_first(recs):
         if len(picks) >= n:
             break
         take(item, "Also fits their profile")
     for seed, query, hits in matched:
-        for item in hits:
+        for item in gifts_first(hits):
             if len(picks) >= n:
                 break
             take(item, reason_for(seed, query), seed.group)
@@ -416,7 +485,7 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
     #    search the occasion or age alone, personalized by the profile.
     general = f"A {ctx}"
     if len(picks) < n and ctx:
-        for item in personalized(ctx, limit=30):
+        for item in gifts_first(personalized(ctx, limit=30)):
             if len(picks) >= n:
                 break
             take(item, general)

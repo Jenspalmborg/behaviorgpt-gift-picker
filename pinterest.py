@@ -280,16 +280,25 @@ def fetch_profile(text: str) -> tuple[Source, list[Pin], list[Board]]:
         if found:
             shares = allocate({slug: count for slug, (_, count) in found.items()}, MAX_PINS)
 
+            def feed(slug: str) -> list[ET.Element]:
+                try:
+                    return _feed_items(Source(source.user, slug).feed_url, client, "")
+                except PinterestError:
+                    return []
+
+            # Each board's page (for its topics) and feed (for its pins) at once.
+            with ThreadPoolExecutor(max_workers=2 * len(shares)) as pool:
+                topics = {slug: pool.submit(_board_topics, source.user, slug, client) for slug in shares}
+                feeds = {slug: pool.submit(feed, slug) for slug in shares}
+
             def read_board(slug: str) -> tuple[list[Pin], Board]:
                 name, size = found[slug]
-                board = Board(name, size, _board_topics(source.user, slug, client))
-                try:
-                    items = _feed_items(Source(source.user, slug).feed_url, client, "")
-                except PinterestError:
-                    return [], board
-                # Fetch a couple extra in case some have no readable title.
-                texts = [t for t in _titles(items[: shares[slug] + 2], client) if t]
-                return [Pin(t, name) for t in texts[: shares[slug]]], board
+                board = Board(name, size, topics[slug].result())
+                items = feeds[slug].result()[: shares[slug] + 2]  # a couple extra in case some have no title
+                # Opening each captionless pin's page is slow; a board with
+                # topics already says what it's about, so skip those pins there.
+                texts = [_pin_text(i) for i in items] if board.topics else _titles(items, client)
+                return [Pin(t, name) for t in texts if t][: shares[slug]], board
 
             with ThreadPoolExecutor(max_workers=len(shares)) as pool:
                 read = list(pool.map(read_board, shares))

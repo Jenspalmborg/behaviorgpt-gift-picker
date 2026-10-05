@@ -414,7 +414,8 @@ function shortlist() {
 function renderResults() {
   const el = $("results"), r = state.meta;
   if (state.loading) {
-    el.innerHTML = `<div class="results-head"><h2>Finding ideas…</h2></div><div class="grid">${skeleton().repeat(3)}</div>`;
+    const what = state.query?.pinterest ? "Reading their Pinterest boards…" : "Finding ideas…";
+    el.innerHTML = `<div class="results-head"><h2>${what}</h2></div><div class="grid">${skeleton().repeat(3)}</div>`;
     return;
   }
   if (state.error) { el.innerHTML = `<div class="empty error">${esc(state.error)}</div>` + shortlist(); return bind(); }
