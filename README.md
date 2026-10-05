@@ -65,7 +65,9 @@ uv run pytest
 
 **Staying on topic.** A card only takes products from the categories its own plain search returned, so with a big food board in the history, the bike board's card still comes back as a bike rather than drifting into the kitchen. If none of the personalized results fits, it uses the theme's own results. The top match follows the same rule (a category one of their interests or themes returns) and counts as the card for whichever board or interest it's closest to, so one watch on screen leaves room for something else.
 
-**Giftable first.** Groceries, household supplies and repair parts (frozen patties, motion-sickness patches, stair treads) go behind everything else unless the name says gift, basket, box, set or kit, so a gourmet gift box still counts.
+**Gifts only.** Food is never picked unless it's sold as a gift (gift basket, hamper, sampler): a pad thai "kit" or a 16 oz box of spaghetti is groceries. That covers the grocery categories plus uncategorized products sold by weight or named as produce. Household supplies and repair parts (motion-sickness patches, stair treads) count only as a set or kit, so a tool set still does.
+
+**Food boards mean cooking.** When most of what a theme or interest finds is food, it also searches "… kitchen tools" and "… cookbook", and food (even a gift box) ranks behind cooking gear and books for its card. A recipe board gives a meat grinder, a cookbook and a vegetable cutter rather than a stir-fry kit and peppers. A pin that only matches food stays in the history as a search, without viewing the groceries.
 
 Many personal pins have no caption; for those the title of the pin's own page is used ("Diy dinosaur play house | Dinosaur dollhouse, …"). Pin titles are searched as written. With an occasion set, the last card searches the occasion alone ("housewarming gift"), still personalized by the pins, because phrases like "Barnerom diy housewarming gift" find nonsense.
 

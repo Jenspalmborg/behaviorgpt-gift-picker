@@ -53,14 +53,20 @@ def test_near_copies_match_in_any_word_order(a, b, same):
     assert near_copy(name_words(a), name_words(b)) is same
 
 
-def test_groceries_and_supplies_only_count_as_gifts_when_sold_as_one():
-    def thing(name, category):
-        return make_item(("x", name, category, "20"))
-    assert not giftable(thing("Ball Park Frozen Beef Patties", "Grocery & Gourmet Food"))
-    assert not giftable(thing("Rubber Stair Treads Non-Slip", "Tools & Home Improvement"))
-    assert giftable(thing("The Bon Appetit Gourmet Gift Basket", "Grocery & Gourmet Food"))
-    assert giftable(thing("Craftsman 230-Piece Tool Set", "Tools & Home Improvement"))
-    assert giftable(thing("Pour Over Coffee Kettle", "Home & Kitchen"))
+@pytest.mark.parametrize("name, category, is_gift", [
+    ("Ball Park Frozen Beef Patties", "Grocery & Gourmet Food", False),
+    ("Taylor Farms Pad Thai Stir Fry Kit, 13.39 Oz", "Grocery & Gourmet Food", False),  # a kit of groceries
+    ("Organic Sweet Mini Peppers, 1 lb", None, False),  # no category, but sold by weight
+    ("PRODUCE Red Bell Peppers", None, False),
+    ("Rubber Stair Treads Non-Slip", "Tools & Home Improvement", False),
+    ("The Bon Appetit Gourmet Gift Basket", "Grocery & Gourmet Food", True),
+    ("Lagers Of the World - case of 12 Premium bottled beers", "Hampers & Gourmet Gifts", True),
+    ("Craftsman 230-Piece Tool Set", "Tools & Home Improvement", True),
+    ("BenShot Pint Glass with Real Golf Ball - 16oz", "Home & Kitchen", True),
+    ("Kitchen Envy Cookbook Vol 1", None, True),
+])
+def test_groceries_and_supplies_only_count_as_gifts_when_sold_as_one(name, category, is_gift):
+    assert giftable(make_item(("x", name, category, "20"))) is is_gift
 
 
 def test_product_url_links_the_asin():
@@ -258,3 +264,23 @@ def test_top_match_is_on_topic_and_giftable(monkeypatch):
     d = gifts(interests=["golf", "coffee"])
     assert d["picks"][0]["reason"] == "Top match for their whole profile"
     assert "Hummus" not in d["picks"][0]["name"]
+
+
+def test_food_themes_also_search_for_kitchen_gear():
+    from pinterest import Board
+    seed = gift_app.theme_seed(Board("Mat", 3, ("pad thai",)))
+    food = {q: (make_item(("f", "Pad Thai Stir Fry Kit, 13 Oz", "Grocery & Gourmet Food", "5"), 1.46),) for q in seed.queries}
+    geared = gift_app.with_food_gear(seed, food)
+    assert geared.queries[-2:] == ["pad thai kitchen tools", "pad thai cookbook"]
+    food["pad thai cookbook"] = (make_item(("b", "Simple Thai Food Cookbook", "Books", "18"), 1.43),)
+    food["pad thai kitchen tools"] = ()
+    query, _ = gift_app.best_query(geared, food, set())
+    assert query == "pad thai cookbook"
+    # A food gift box scoring a little higher still loses to the cookbook.
+    food["pad thai gift"] = (make_item(("g", "Thai Gourmet Gift Basket", "Grocery & Gourmet Food", "40"), 1.46),)
+    assert gift_app.best_query(geared, food, set())[0] == "pad thai cookbook"
+    assert gift_app.reason_for(geared, query) == "For their love of pad thai"
+    # Boards that aren't about food are left alone.
+    bikes = gift_app.theme_seed(Board("Prylar", 3, ("fixie bike",)))
+    bike_results = {q: (make_item(("k", "Fixie Bike", "Sports & Outdoors", "300"), 1.48),) for q in bikes.queries}
+    assert gift_app.with_food_gear(bikes, bike_results).queries == bikes.queries

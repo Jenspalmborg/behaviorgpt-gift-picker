@@ -107,6 +107,10 @@ class Seed(BaseModel):
 
 
 _SUFFIXES = (" gift", " accessories")
+# For food boards and interests, the gift is the gear and the books around
+# the food: "peppers recipes kitchen tools" finds a garlic press, "yummy
+# dinners cookbook" a cookbook, where "pad thai gift" finds a noodle kit.
+_FOOD_SUFFIXES = (" kitchen tools", " cookbook")
 
 
 def topic_of(seed: Seed, query: str) -> str | None:
@@ -118,7 +122,7 @@ def topic_of(seed: Seed, query: str) -> str | None:
     # Matched against the seed's own topics, since a topic can itself end in
     # a suffix: "mens accessories" is one of Pinterest's watch topics.
     for topic in seed.topics or [seed.label]:
-        if query == topic or any(query == topic + suffix for suffix in _SUFFIXES):
+        if query == topic or any(query == topic + suffix for suffix in _SUFFIXES + _FOOD_SUFFIXES):
             return topic
     return query
 
@@ -199,21 +203,33 @@ def near_copy(a: set[str], b: set[str]) -> bool:
     return shared >= 2 and shared >= min(3, len(a), len(b))
 
 
-# Groceries, household supplies and repair parts make poor gifts (frozen
-# patties, motion-sickness patches, stair treads), unless sold as a gift.
-_LOW_GIFT_CATEGORIES = {"grocery & gourmet food", "health & household", "household supplies",
-                        "tools & home improvement"}
-_GIFT_WORDS = re.compile(r"\b(gifts?|baskets?|hampers?|box|sets?|kits?|sampler|collection)\b", re.I)
+# Food is only a gift when it's sold as one: a gift basket, a hamper, a
+# sampler. A pad thai "kit" or a "16 oz box" of spaghetti is groceries.
+# Uncategorized products with a weight or count in the name are food too
+# ("Organic Sweet Mini Peppers, 1 lb"), as are ones named as produce.
+_FOOD_CATEGORIES = {"grocery & gourmet food", "fresh & chilled", "produce", "beverages", "snacks"}
+_FOOD_GIFT_WORDS = re.compile(r"\b(gifts?|baskets?|hampers?|sampler)\b", re.I)
+_PRODUCE = re.compile(r"\b(produce|fresh|frozen)\b", re.I)
+_QUANTITY = re.compile(r"\b\d+(\.\d+)?\s*-?\s*(oz|ounces?|lbs?|pounds?|g|grams?|kg|ml|fl\.?\s*oz|count|ct)\b", re.I)
+# Household supplies and repair parts (motion-sickness patches, stair
+# treads) count only as a set or kit: a tool set is a fine gift.
+_SUPPLY_CATEGORIES = {"health & household", "household supplies", "tools & home improvement"}
+_SUPPLY_GIFT_WORDS = re.compile(r"\b(gifts?|baskets?|sets?|kits?|collection)\b", re.I)
+
+
+def is_food(item: Item) -> bool:
+    category = (item.data.get("categories") or "").strip().lower()
+    name = item.data.get("name", "")
+    return category in _FOOD_CATEGORIES or (not category and bool(_QUANTITY.search(name) or _PRODUCE.search(name)))
 
 
 def giftable(item: Item) -> bool:
-    category = (item.data.get("categories") or "").strip().lower()
-    return category not in _LOW_GIFT_CATEGORIES or bool(_GIFT_WORDS.search(item.data.get("name", "")))
-
-
-def gifts_first(items) -> list[Item]:
-    """Same order, giftable products ahead of the rest."""
-    return sorted(items, key=lambda i: not giftable(i))
+    name = item.data.get("name", "")
+    if is_food(item):
+        return bool(_FOOD_GIFT_WORDS.search(name))
+    if (item.data.get("categories") or "").strip().lower() in _SUPPLY_CATEGORIES:
+        return bool(_SUPPLY_GIFT_WORDS.search(name))
+    return True
 
 
 def category_key(item: Item) -> str:
@@ -248,6 +264,18 @@ def theme_seed(board: Board) -> Seed:
     )
 
 
+def with_food_gear(seed: Seed, results: dict[str, tuple[Item, ...]]) -> Seed:
+    """If most of what a theme or interest finds is food, also search for the
+    gear and books around it ("... kitchen tools", "... cookbook")."""
+    if seed.kind == "pin":
+        return seed
+    tops = [results[q][0] for q in seed.queries if results.get(q)]
+    if not tops or sum(map(is_food, tops)) * 2 < len(tops):
+        return seed
+    topics = seed.topics or [seed.label]
+    return seed.model_copy(update={"queries": seed.queries + [t + s for t in topics[:3] for s in _FOOD_SUFFIXES]})
+
+
 def pin_seed(pin: Pin) -> Seed:
     """Pin titles are already descriptive, so they're searched as written."""
     return Seed(
@@ -278,12 +306,25 @@ def best_query(seed: Seed, results: dict[str, tuple[Item, ...]], board_cats: set
     def score(q):
         return results[q][0].score if results.get(q) else 0.0
 
-    if seed.kind != "theme":
+    def value(q):
+        # A phrasing whose best result isn't a gift (a noodle kit) loses to
+        # one that is, unless nothing better exists. Even a food gift box
+        # ranks behind cooking gear and cookbooks for a food theme: the card
+        # should be something to cook with.
+        top = results.get(q)
+        if not top or not giftable(top[0]):
+            return score(q) - 0.2
+        return score(q) - (0.05 if is_food(top[0]) else 0.0)
+
+    if seed.kind == "pin":
         q = max(seed.queries, key=score)
+        return q, score(q)
+    if seed.kind == "interest":
+        q = max(seed.queries, key=value)
         return q, score(q)
 
     cats_by_topic = {
-        t: {i.data.get("categories") for v in (t, *(t + s for s in _SUFFIXES)) for i in results.get(v, ())[:5]}
+        t: {i.data.get("categories") for v in seed.queries if topic_of(seed, v) == t for i in results.get(v, ())[:5]}
         for t in seed.topics
     }
 
@@ -295,7 +336,7 @@ def best_query(seed: Seed, results: dict[str, tuple[Item, ...]], board_cats: set
         others = [c for t, c in cats_by_topic.items() if t != topic] + ([board_cats] if board_cats else [])
         return sum(top_cat in c for c in others) / len(others) if others else 0.0
 
-    q = max(seed.queries, key=lambda q: score(q) + THEME_FIT_WEIGHT * fit(q))
+    q = max(seed.queries, key=lambda q: value(q) + THEME_FIT_WEIGHT * fit(q))
     return q, score(q)
 
 
@@ -304,8 +345,14 @@ def build_history(seeds: list[Seed], max_price: float | None):
     the person had browsed a store for the things they love. Seeds come in
     priority order; the history replays them in reverse so the strongest
     signals are the most recent events."""
-    queries = list(dict.fromkeys(q for seed in seeds for q in seed.queries))
-    results = dict(zip(queries, _SEARCH_POOL.map(_search, queries)))
+    def search_all(queries):
+        new = [q for q in dict.fromkeys(queries) if q not in results]
+        results.update(zip(new, _SEARCH_POOL.map(_search, new)))
+
+    results: dict[str, tuple[Item, ...]] = {}
+    search_all(q for seed in seeds for q in seed.queries)
+    seeds = [with_food_gear(seed, results) for seed in seeds]
+    search_all(q for seed in seeds for q in seed.queries)
 
     # What each board's pins matched, for judging its theme's phrasings.
     board_cats: dict[str, set] = defaultdict(set)
@@ -319,14 +366,16 @@ def build_history(seeds: list[Seed], max_price: float | None):
     unmatched: list[str] = []
     for seed in seeds:
         query, score = best_query(seed, results, board_cats[seed.group])
-        hits = [i for i in results[query] if within_budget(i, max_price)]
-        if score < MIN_MATCH_SCORE or not hits:
+        hits = [i for i in results[query] if within_budget(i, max_price) and giftable(i)]
+        # A pin about food still says what they like, so it stays as a
+        # search even with nothing giftable to view; the rest need a match.
+        if score < MIN_MATCH_SCORE or (not hits and seed.kind != "pin"):
             if seed.kind == "interest":
                 unmatched.append(seed.label)
             continue
         matched.append((seed, query, hits))
     for _, query, hits in reversed(matched):
-        history += [Search(query), View(hits[0].id)]
+        history += [Search(query), *([View(hits[0].id)] if hits else [])]
     return history, matched, unmatched
 
 
@@ -401,7 +450,7 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
             return False
         if any(near_copy(words, used) for used in used_names):
             return False
-        if not within_budget(item, req.max_price) or not fits_age(item, req.age):
+        if not within_budget(item, req.max_price) or not fits_age(item, req.age) or not giftable(item):
             return False
         picks.append(to_card(item, reason, group))
         used_ids.add(item.id)
@@ -425,7 +474,7 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
         lead = "More like what you saved" if req.liked else "Top match for their whole profile"
         topical = [m for m in matched if m[0].kind != "pin"] or matched
         on_topic = {i.data.get("categories") for _, query, _ in topical for i in _search(query)}
-        for item in gifts_first(i for i in recs if i.data.get("categories") in on_topic):
+        for item in (i for i in recs if i.data.get("categories") in on_topic):
             if take(item, lead):
                 group = closest_group(item, matched)
                 picks[-1]["group"] = group
@@ -462,21 +511,21 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
             if len(picks) >= seed_slots:
                 break
             on_topic = {i.data.get("categories") for i in _search(query)}
-            for item in gifts_first([*(i for i in items if i.data.get("categories") in on_topic), *hits]):
+            for item in [*(i for i in items if i.data.get("categories") in on_topic), *hits]:
                 if take(item, reason_for(seed, query), seed.group):
                     break
         if for_occasion:
-            for item in gifts_first(for_occasion.result()):
+            for item in for_occasion.result():
                 if len(picks) >= n or take(item, f"A {ctx}"):
                     break
 
     # 3) Fill any remaining slots from the blended list, then the raw seeds.
-    for item in gifts_first(recs):
+    for item in recs:
         if len(picks) >= n:
             break
         take(item, "Also fits their profile")
     for seed, query, hits in matched:
-        for item in gifts_first(hits):
+        for item in hits:
             if len(picks) >= n:
                 break
             take(item, reason_for(seed, query), seed.group)
@@ -485,7 +534,7 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
     #    search the occasion or age alone, personalized by the profile.
     general = f"A {ctx}"
     if len(picks) < n and ctx:
-        for item in gifts_first(personalized(ctx, limit=30)):
+        for item in personalized(ctx, limit=30):
             if len(picks) >= n:
                 break
             take(item, general)
