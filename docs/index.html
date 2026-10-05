@@ -229,7 +229,7 @@
 
 <nav>
   <div class="wrap">
-    <a class="logo" href="/">
+    <a class="logo" href="./">
       <span class="logo-mark">
         <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5"/></svg>
       </span>
@@ -296,7 +296,9 @@
 </main>
 
 
+<script src="config.js"></script>
 <script>
+const API = window.GIFT_API || "";
 const state = { mode: "interests", interests: [], loading: false, error: null };
 const PIN_ICON = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.6 19.3c-.1-.8-.2-2 0-2.9l1.2-5s-.3-.6-.3-1.5c0-1.4.8-2.4 1.8-2.4.9 0 1.3.6 1.3 1.4 0 .9-.5 2.2-.8 3.4-.2 1 .5 1.9 1.6 1.9 1.9 0 3.3-2 3.3-4.9 0-2.6-1.8-4.4-4.5-4.4-3 0-4.8 2.3-4.8 4.6 0 .9.4 1.9.8 2.4l.1.4-.3 1.2c0 .2-.2.3-.4.2-1.3-.6-2.2-2.6-2.2-4.2 0-3.4 2.5-6.6 7.2-6.6 3.8 0 6.7 2.7 6.7 6.3 0 3.7-2.4 6.8-5.6 6.8-1.1 0-2.2-.6-2.5-1.3l-.7 2.6c-.2 1-.9 2.2-1.4 2.9A10 10 0 1 0 12 2z"/></svg>`;
 const isPinterest = (t) => /pinterest\.|pin\.it\//i.test(t);
@@ -467,10 +469,15 @@ async function fetchPicks(n, { focus = null, liked = state.liked, keep = [] } = 
   // No near-copies of what they waved off, of the cards staying on screen,
   // or of what was shown recently.
   const avoid_similar = [...new Set([...state.avoid.slice(-15), ...keep.map(g => g.name), ...state.shownNames.slice(-20)])].slice(-40);
-  const res = await fetch("/api/gifts", {
+  // A free backend sleeps when idle and takes a while to wake up.
+  const slow = setTimeout(() => {
+    const h = document.querySelector(".results-head h2");
+    if (h && state.loading) h.textContent = "Waking up the gift server… this can take up to a minute.";
+  }, 6000);
+  const res = await fetch(API + "/api/gifts", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...state.query, n, focus, liked, exclude, avoid_similar, recent_groups: state.groups.slice(-20) }),
-  }).catch(() => { throw new Error("Couldn’t reach the server. Is it running?"); });
+  }).catch(() => { throw new Error("Couldn’t reach the server. Is it running?"); }).finally(() => clearTimeout(slow));
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Something went wrong.");
   state.shown.push(...data.picks.map(g => g.id));
@@ -522,7 +529,7 @@ function showOthers() {
 async function share() {
   state.sharing = true; renderResults();
   try {
-    const res = await fetch("/api/lists", {
+    const res = await fetch(API + "/api/lists", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         person: state.meta?.person || state.query?.person || "",
@@ -532,7 +539,7 @@ async function share() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error();
-    state.shareUrl = location.origin + data.path;
+    state.shareUrl = new URL(`list.html?id=${encodeURIComponent(data.id)}`, location.href).href;
   } catch {
     state.flash = "Couldn’t create a share link. Try again.";
   }

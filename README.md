@@ -8,6 +8,8 @@ Every recommendation comes from BehaviorGPT. There is no LLM in the loop.
 
 It is a small, complete example of building on the BehaviorGPT SDK: no catalog to upload, no user data. Just a synthetic history, recommendations and personalized search against one of the pre-embedded catalogs.
 
+**[▶ Try it here](https://jenspalmborg.github.io/behaviorgpt-gift-picker/)**
+
 > Status: working prototype. It runs against the pre-embedded `retail_catalog`, so gift quality depends on what that catalog carries.
 
 ## What it shows
@@ -85,15 +87,28 @@ The name is only used for the heading. The SDK's `Domains` has `age_group` and `
 
 ```
 app.py              FastAPI backend: builds the history, calls BehaviorGPT, picks gifts
-pinterest.py        reads recent pins from a public Pinterest profile or board
+pinterest.py        reads pins and board topics from a public Pinterest profile or board
 lists.py            shareable shortlists and votes (SQLite)
-static/index.html   the main page (plain HTML, CSS and JS, no build step)
-static/list.html    the shared shortlist page at /list/<id>
+docs/index.html     the main page (plain HTML, CSS and JS, no build step)
+docs/list.html      the shared shortlist page, list.html?id=<id>
+docs/config.js      where the page finds the API (same server locally, Render on Pages)
+render.yaml         how Render builds and runs the API
 tests/              pytest suite; BehaviorGPT and Pinterest are faked
 docs/screenshots/   README images
 ```
 
 `GIFT_CATALOG_ID` and `GIFT_MARKET` in `.env` switch to another catalog or market.
+
+## Deploy
+
+The page is static and lives in `docs/`, so GitHub Pages serves it as is. The API can't be static: it holds the BehaviorGPT key, fetches Pinterest (which browsers can't do across sites) and stores shortlists. It runs on [Render](https://render.com)'s free plan:
+
+1. **API:** in Render, *New → Blueprint*, pick this repo, and paste your key for `UNBOXAI_API_KEY`. `render.yaml` does the rest. Calls are only accepted from `ALLOWED_ORIGINS` (https://jenspalmborg.github.io).
+2. **Page:** in the repo's *Settings → Pages*, deploy from the `main` branch, `/docs` folder.
+
+`docs/config.js` points the page at `https://behaviorgpt-gift-picker.onrender.com` when it's on github.io; change it if Render gives the service another name.
+
+The free plan sleeps after 15 minutes without visits, so the first search after a pause takes up to a minute while it wakes (the page says so). Its disk doesn't survive a restart, so shared shortlists can disappear; a paid disk (`GIFT_DB` pointing at it) keeps them.
 
 ## Known limits
 

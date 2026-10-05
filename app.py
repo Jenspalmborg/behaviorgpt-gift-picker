@@ -19,8 +19,8 @@ from behaviorgpt._exceptions import AuthenticationError, UnboxAIError
 from behaviorgpt.types import Item
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field, StringConstraints
 
 import lists
@@ -58,8 +58,17 @@ def get_client() -> UnboxAIClient:
 
 app = FastAPI(title="Gift Picker")
 
-STATIC = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+# The pages live in docs/ so GitHub Pages can serve them as they are; locally
+# this server serves them too, next to the API.
+PAGES = Path(__file__).parent / "docs"
+
+# On GitHub Pages the page calls this API from another origin.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "https://jenspalmborg.github.io").split(",") if o.strip()],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 Occasion = Literal["birthday", "christmas", "anniversary", "wedding", "housewarming", "baby shower", "thank you"]
 Age = Literal["baby", "kid", "teen", "adult", "senior"]
@@ -607,11 +616,28 @@ app.include_router(lists.router)
 NO_CACHE = {"Cache-Control": "no-cache"}
 
 
+@app.get("/api/health")
+def health():
+    """For the host's health check, and for waking a sleeping server."""
+    return {"ok": True}
+
+
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html", headers=NO_CACHE)
+    return FileResponse(PAGES / "index.html", headers=NO_CACHE)
+
+
+@app.get("/list.html")
+def list_page():
+    return FileResponse(PAGES / "list.html", headers=NO_CACHE)
+
+
+@app.get("/config.js")
+def config():
+    return FileResponse(PAGES / "config.js", headers=NO_CACHE)
 
 
 @app.get("/list/{list_id}")
-def list_page(list_id: str):
-    return FileResponse(STATIC / "list.html", headers=NO_CACHE)
+def old_list_link(list_id: str):
+    """Shortlist links used to look like /list/<id>."""
+    return RedirectResponse(f"/list.html?id={list_id}")

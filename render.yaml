@@ -1,0 +1,17 @@
+# The API behind the GitHub Pages site. In Render: New > Blueprint, pick this
+# repo, and paste the BehaviorGPT key when asked for UNBOXAI_API_KEY.
+services:
+  - type: web
+    name: behaviorgpt-gift-picker
+    runtime: python
+    plan: free
+    buildCommand: pip install uv && uv sync --frozen --no-dev
+    startCommand: .venv/bin/uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.11"
+      - key: UNBOXAI_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: https://jenspalmborg.github.io

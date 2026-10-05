@@ -47,4 +47,13 @@ def test_list_errors(temp_db):
     assert client.post("/api/lists", json={"items": []}).status_code == 422
     bad_image = [{"id": "x1", "name": "a", "image_url": "javascript:alert(1)"}]
     assert client.post("/api/lists", json={"items": bad_image}).status_code == 422
-    assert client.get(f"/list/{list_id}").status_code == 200
+    assert client.get(f"/list.html?id={list_id}").status_code == 200
+    old_link = client.get(f"/list/{list_id}", follow_redirects=False)
+    assert old_link.status_code == 307 and old_link.headers["location"] == f"/list.html?id={list_id}"
+
+
+def test_cors_allows_only_the_github_pages_site():
+    ok = client.options("/api/gifts", headers={"Origin": "https://jenspalmborg.github.io", "Access-Control-Request-Method": "POST"})
+    assert ok.headers.get("access-control-allow-origin") == "https://jenspalmborg.github.io"
+    other = client.options("/api/gifts", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+    assert "access-control-allow-origin" not in other.headers

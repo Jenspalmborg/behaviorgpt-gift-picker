@@ -103,7 +103,7 @@ def create_list(body: NewList):
             "INSERT INTO lists (id, person, occasion, items, created) VALUES (?, ?, ?, ?, ?)",
             (list_id, body.person, body.occasion, json.dumps(items), time.time()),
         )
-    return {"id": list_id, "path": f"/list/{list_id}"}
+    return {"id": list_id, "path": f"list.html?id={list_id}"}
 
 
 @router.get("/api/lists/{list_id}")
