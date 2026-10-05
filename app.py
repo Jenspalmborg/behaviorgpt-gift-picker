@@ -5,6 +5,7 @@ Run:  uv run uvicorn app:app --reload
 """
 
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -57,7 +58,6 @@ STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 Occasion = Literal["birthday", "christmas", "anniversary", "wedding", "housewarming", "baby shower", "thank you"]
-Relationship = Literal["partner", "mom", "dad", "friend", "coworker", "grandma", "grandpa", "sister", "brother"]
 Age = Literal["baby", "kid", "teen", "adult", "senior"]
 ProductId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,40}$")]
 
@@ -68,7 +68,6 @@ class GiftRequest(BaseModel):
     pinterest: str | None = Field(None, max_length=300)
     max_price: float | None = None
     occasion: Occasion | None = None
-    relationship: Relationship | None = None
     age: Age | None = None
     # Refinement: products they saved ("more like this"), products already
     # shown or saved that shouldn't come back, and categories they waved off.
@@ -96,12 +95,60 @@ class Seed(BaseModel):
 
 _AGE_TERMS = {"baby": "baby", "kid": "kids", "teen": "teen", "senior": "seniors"}
 
+# Words in "Who's it for?" that say who they are to you, as the catalog's
+# sellers would phrase it ("gift for boyfriend"). Swedish too, for "pappa".
+_RECIPIENTS = {
+    "mom": "mom", "mum": "mom", "mother": "mom", "mamma": "mom",
+    "dad": "dad", "father": "dad", "pappa": "dad",
+    "boyfriend": "boyfriend", "pojkvän": "boyfriend", "girlfriend": "girlfriend", "flickvän": "girlfriend",
+    "husband": "husband", "wife": "wife", "fru": "wife", "partner": "partner", "sambo": "partner",
+    "fiance": "fiance", "fiancé": "fiance", "fiancee": "fiancee", "fiancée": "fiancee",
+    "sister": "sister", "syster": "sister", "brother": "brother", "bror": "brother",
+    "friend": "friend", "bestie": "best friend", "vän": "friend", "kompis": "friend",
+    "coworker": "coworker", "colleague": "coworker", "kollega": "coworker", "boss": "boss", "chef": "boss",
+    "grandma": "grandma", "grandmother": "grandma", "granny": "grandma", "mormor": "grandma", "farmor": "grandma",
+    "grandpa": "grandpa", "grandfather": "grandpa", "morfar": "grandpa", "farfar": "grandpa",
+    "son": "son", "daughter": "daughter", "dotter": "daughter",
+    "aunt": "aunt", "uncle": "uncle", "niece": "niece", "nephew": "nephew", "teacher": "teacher", "lärare": "teacher",
+}
+
+
+def recipient(person: str) -> str:
+    """'my boyfriend' -> 'boyfriend', 'Anna (sister)' -> 'sister', 'Anna' -> ''."""
+    words = re.findall(r"[^\W\d_]+", person.lower())
+    if "best" in words and "friend" in words:
+        return "best friend"
+    return next((_RECIPIENTS[w] for w in words if w in _RECIPIENTS), "")
+
+
+# The catalog has no age field. For young children, keep products from
+# children's categories, or whose name says who they're for. Teens buy from
+# the same shelves as adults, so for them only the search wording changes.
+# Plain "Books" and "Toys & Games" aren't enough on their own for a baby:
+# "Rolex: 3,621 Wristwatches" is a book.
+_CHILD_CATEGORIES = {
+    "baby": {"baby products", "baby & toddler toys", "soothers & teethers", "nursery", "children's books"},
+    "kid": {"toys & games", "arts, crafts & sewing", "arts & crafts", "building & construction toys",
+            "jigsaws & puzzles", "dress up & pretend play", "children's books"},
+}
+_CHILD_WORDS = {
+    "baby": re.compile(r"\b(baby|babies|infants?|newborns?|toddlers?|nursery|\d+\s*months?)\b", re.I),
+    "kid": re.compile(r"\b(kids?|children'?s?|boys?|girls?|toddlers?|ages? \d)", re.I),
+}
+
+
+def fits_age(item: Item, age: str | None) -> bool:
+    if age not in _CHILD_CATEGORIES:
+        return True
+    category = (item.data.get("categories") or "").strip().lower()
+    return category in _CHILD_CATEGORIES[age] or bool(_CHILD_WORDS[age].search(item.data.get("name", "")))
+
 
 def context_phrase(req: GiftRequest) -> str:
     """'birthday gift for dad', 'gift for teen', or '' when nothing is set.
     A child's age says more than the relationship ("dad" of a toddler isn't
     the recipient), so baby/kid/teen win over it."""
-    who = req.relationship or ""
+    who = recipient(req.person)
     if req.age in ("baby", "kid", "teen") or (req.age == "senior" and not who):
         who = _AGE_TERMS[req.age]
     if not (req.occasion or who):
@@ -214,7 +261,7 @@ def to_card(item: Item, reason: str, seed: str | None = None) -> dict:
 def pick_gifts(seeds: list[Seed], req: GiftRequest):
     history, matched, unmatched = build_history(seeds, req.max_price)
     if not history:
-        return [], unmatched
+        return [], unmatched, None
     seen_ids = {e.product for e in history if isinstance(e, View)}
     # Saving a product is the strongest signal we have, so it goes last. The
     # model leans hard on the latest events, which is why only the first card
@@ -237,7 +284,7 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
             return False
         if stem in used_stems:
             return False
-        if not within_budget(item, req.max_price):
+        if not within_budget(item, req.max_price) or not fits_age(item, req.age):
             return False
         picks.append(to_card(item, reason, seed))
         used_ids.add(item.id)
@@ -296,7 +343,19 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
                 break
             take(item, seed.reason, seed.label)
 
-    return picks[:n], unmatched
+    # 4) Still short, usually because nothing they like fits the age set:
+    #    search the occasion or recipient alone, personalized by the profile.
+    general = f"A {ctx}"
+    if len(picks) < n and ctx:
+        for item in personalized(ctx, limit=30):
+            if len(picks) >= n:
+                break
+            take(item, general)
+    note = None
+    if req.age in _CHILD_CATEGORIES and picks and all(p["reason"] == general for p in picks):
+        note = f"Nothing in their {'pins' if matched[0][0].topic is None else 'interests'} suits a {_AGE_TERMS[req.age].rstrip('s')}, so these are general ideas."
+
+    return picks[:n], unmatched, note
 
 
 _pin_cache: dict[str, tuple[float, tuple]] = {}
@@ -330,7 +389,7 @@ def gifts(req: GiftRequest):
     if not seeds:
         raise HTTPException(400, "Add at least one interest or a Pinterest link.")
     try:
-        picks, unmatched = pick_gifts(seeds, req)
+        picks, unmatched, note = pick_gifts(seeds, req)
     except AuthenticationError as exc:
         global _client
         _client = None  # pick up a fixed key on the next request
@@ -348,6 +407,7 @@ def gifts(req: GiftRequest):
         "occasion": req.occasion,
         "picks": picks,
         "unmatched": unmatched,
+        "note": note,
     }
 
 

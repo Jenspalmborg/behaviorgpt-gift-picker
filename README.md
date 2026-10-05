@@ -35,7 +35,7 @@ cp .env.example .env                # paste your key as UNBOXAI_API_KEY
 uv run uvicorn app:app --reload
 ```
 
-Open http://127.0.0.1:8000. Links like `/?for=Mom&interests=running,hiking,flowers&budget=50&occasion=birthday&relationship=mom` (or `/?for=Jane&pinterest=jane/cozy-home`) fill in the form and run the search, which is handy for sharing examples.
+Open http://127.0.0.1:8000. Links like `/?for=Mom&interests=running,hiking,flowers&budget=50&occasion=birthday` (or `/?for=Jane&pinterest=jane/cozy-home`) fill in the form and run the search, which is handy for sharing examples.
 
 Shared shortlists are stored in SQLite at `data/gift-picker.db`; set `GIFT_DB` to put it elsewhere.
 
@@ -55,7 +55,9 @@ Shared shortlists are stored in SQLite at `data/gift-picker.db`; set `GIFT_DB` t
 
 **Pinterest.** Public profiles and boards have RSS feeds (`/<user>/feed.rss`, `/<user>/<board>.rss`), so no login or API key is needed. Many personal pins have no caption; for those the title of the pin's own page is used ("Diy dinosaur play house | Dinosaur dollhouse, …"). Pin titles are searched as written. With an occasion set, the last card searches the occasion alone ("housewarming gift"), still personalized by the pins, because phrases like "Barnerom diy housewarming gift" find nonsense.
 
-**Occasion, relationship and age** only shape the search wording: "birthday gift for dad" on its own returns generic gift-shop items, but "golf birthday gift for dad" returns golf gifts. A child's age wins over the relationship ("gift for kids").
+**Occasion, recipient and age.** The recipient is read from "Who's it for?": "my boyfriend", "Pappa" or "Anna (sister)" give "boyfriend", "dad" and "sister", while a plain name gives nothing. These shape the search wording: "birthday gift for dad" on its own returns generic gift-shop items, but "golf birthday gift for dad" returns golf gifts. A child's age wins over the relationship ("gift for kids").
+
+For a baby or a kid, age is also a filter, since the catalog has no age field: a pick must be in a children's category (Baby Products, Toys & Games, Children's Books, …) or say so in its name ("toddler", "6 months", "for kids"). If nothing they like passes, the cards fall back to general ideas for that age and the page says so. Teens shop from the same categories as adults, so for them only the wording changes.
 
 **Prices.** The catalog stores prices of $1,000 and up as only their thousands digit (a MacBook is `"1"`), so prices under $10 are treated as unknown, and with a budget set, items without a trusted price are left out.
 

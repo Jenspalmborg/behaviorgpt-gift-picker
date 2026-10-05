@@ -98,7 +98,7 @@
   .pin-in svg { width: 16px; height: 16px; color: #e60023; flex: none; }
   [hidden] { display: none !important; }
 
-  /* Occasion / relationship / age */
+  /* Occasion / age */
   .extras { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 8px 4px; margin-top: 8px; border-top: 1px solid var(--line); }
   .pick { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--ink-3); background: var(--bg);
           border: 1px solid var(--line); border-radius: 999px; padding: 3px 4px 3px 12px; cursor: pointer; }
@@ -252,7 +252,7 @@
       <div class="fields">
         <div class="field" data-for="name">
           <label for="name">Who’s it for?</label>
-          <input id="name" type="text" placeholder="Name or relation">
+          <input id="name" type="text" placeholder="e.g. Dad, my boyfriend, Anna">
         </div>
         <div class="field field-interests" id="source-field" data-for="interest-input">
           <div class="modes" role="group" aria-label="Find gifts from">
@@ -282,12 +282,6 @@
             <option value="">Any</option><option value="birthday">Birthday</option><option value="christmas">Christmas</option>
             <option value="anniversary">Anniversary</option><option value="wedding">Wedding</option><option value="housewarming">Housewarming</option>
             <option value="baby shower">Baby shower</option><option value="thank you">Thank you</option>
-          </select></label>
-        <label class="pick"><span>For my</span>
-          <select id="relationship">
-            <option value="">Anyone</option><option value="partner">Partner</option><option value="mom">Mom</option><option value="dad">Dad</option>
-            <option value="sister">Sister</option><option value="brother">Brother</option><option value="friend">Friend</option>
-            <option value="coworker">Coworker</option><option value="grandma">Grandma</option><option value="grandpa">Grandpa</option>
           </select></label>
         <label class="pick"><span>Age</span>
           <select id="age">
@@ -427,7 +421,7 @@ function renderResults() {
   const missed = r.unmatched?.length
     ? `<div class="notice">We couldn’t find anything for <b>${esc(r.unmatched.join(", "))}</b> in this catalog, so ${r.unmatched.length > 1 ? "those were" : "that was"} left out.</div>`
     : "";
-  const flash = state.flash ? `<div class="notice">${esc(state.flash)}</div>` : "";
+  const flash = [state.flash, r.note].filter(Boolean).map(t => `<div class="notice">${esc(t)}</div>`).join("");
   if (!state.cards.length && !state.busy.size) {
     el.innerHTML = `<div class="empty">No matches yet. Try more specific interests (like “trail running shoes”) or a higher budget.</div>${missed}${shortlist()}`;
     return bind();
@@ -540,7 +534,7 @@ function reset() {
   Object.assign(state, { interests: [], query: null, meta: null, cards: [], shown: [], liked: [], avoid: [],
                          saved: [], shareUrl: null, flash: null, error: null });
   storeSaved();
-  ["name", "budget", "interest-input", "pinterest-input", "occasion", "relationship", "age"].forEach(id => $(id).value = "");
+  ["name", "budget", "interest-input", "pinterest-input", "occasion", "age"].forEach(id => $(id).value = "");
   markPicks(); renderChips(); renderResults();
   window.scrollTo({ top: 0, behavior: "smooth" }); $("name").focus({ preventScroll: true });
 }
@@ -583,7 +577,6 @@ $("finder").addEventListener("submit", async e => {
     ...(state.mode === "pinterest" ? { pinterest } : { interests: [...state.interests] }),
     max_price: budget ? +budget : null,
     occasion: $("occasion").value || null,
-    relationship: $("relationship").value || null,
     age: $("age").value || null,
   };
   Object.assign(state, { cards: [], shown: [], liked: [], avoid: [], flash: null, loading: true });
@@ -606,13 +599,13 @@ $("interest-input").addEventListener("paste", e => {
 });
 
 // Shareable links run the search on load:
-//   /?for=Mom&interests=running,hiking,flowers&budget=50&occasion=birthday&relationship=mom
+//   /?for=Mom&interests=running,hiking,flowers&budget=50&occasion=birthday
 //   /?for=Mom&pinterest=jane/cozy-home
 const params = new URLSearchParams(location.search);
 if (params.get("interests") || params.get("pinterest")) {
   $("name").value = params.get("for") || "";
   $("budget").value = params.get("budget") || "";
-  for (const id of ["occasion", "relationship", "age"]) {
+  for (const id of ["occasion", "age"]) {
     const v = params.get(id);
     if ([...$(id).options].some(o => o.value === v)) $(id).value = v;
   }
