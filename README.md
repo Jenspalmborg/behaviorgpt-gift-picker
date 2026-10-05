@@ -18,7 +18,7 @@ It is a small, complete example of building on the BehaviorGPT SDK: no catalog t
 | Turning interests into a profile | `Search` + `View` events, one pair per interest |
 | "Top match for their whole profile" | `complete` with the profile, ending on a `View` (recommendations) |
 | "For their love of …" | `complete` with the profile plus a final `Search` (personalized search) |
-| Pinterest import | pins from every board, weighted by board size; each title becomes a `Search` + `View` pair |
+| Pinterest import | each board's Pinterest topics become a theme search; pins from every board, weighted by board size, fill the history |
 | Occasion and age | the per-interest search says it: `Search("golf birthday gift")` |
 | ♥ Save, more like this | `View` + `AddToCart` of the saved product appended to the profile |
 | ✕ Not for them | same call, with that product and its near-copies excluded |
@@ -60,6 +60,10 @@ uv run pytest
 5. **Refine.** Saving a card adds `View` + `AddToCart` of it at the end of the session. The model leans hard on the latest events (one saved kettle turns every result into kettles), so only that card's slot follows the saves, as "More like what you saved"; the others stay tied to one interest each. ✕ replaces a card from the same interest, skipping near-copies of it (same first words of the title, usually the same brand and line) for the rest of the session. "Show me others" asks again while excluding everything already shown.
 
 **Pinterest.** Public profiles and boards have RSS feeds (`/<user>/feed.rss`, `/<user>/<board>.rss`), so no login or API key is needed. For a profile, the board list and sizes come from the profile page, and 16 pins are split over the boards: one each, the rest by the square root of board size. A 1,000-pin watch board and a 10-pin clothes board come out about 7:1, so the big interest leads without drowning out the rest. Pins are interleaved across boards, so the latest events in the history are a mix. If the board list can't be read, the profile's recent-pins feed is used instead.
+
+**Board themes.** Each board page lists Pinterest's own topics for it, in English whatever the board is called: "Prag" gives "prague czech republic, prague, beautiful places", "Prylar" gives "beautiful bicycle, fixed bike, fixie bike". The first five are each tried as is, as a gift and as accessories (for Prag, the fifth, "places to travel accessories", wins with a luggage scale), and the best-scoring phrasing becomes the board's theme. Board cards come from the theme ("For their love of fixie bike"), so a board reads as a concept, not as one pin's caption. Themes also go first in the history, one per board.
+
+**Staying on topic.** A card only takes products from the categories its own plain search returned, so with a big food board in the history, the bike board's card still comes back as a bike rather than drifting into the kitchen. If none of the personalized results fits, it uses the theme's own results. The top match counts as the card for whichever board or interest it's closest to, so one watch on screen leaves room for something else.
 
 Many personal pins have no caption; for those the title of the pin's own page is used ("Diy dinosaur play house | Dinosaur dollhouse, …"). Pin titles are searched as written. With an occasion set, the last card searches the occasion alone ("housewarming gift"), still personalized by the pins, because phrases like "Barnerom diy housewarming gift" find nonsense.
 

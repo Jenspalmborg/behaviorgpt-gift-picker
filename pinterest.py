@@ -4,6 +4,10 @@ Pinterest publishes an RSS feed for every public profile (/<user>/feed.rss)
 and board (/<user>/<board>.rss), so no login or API key is needed. For a
 profile, pins are drawn from each board in proportion to its size, so the
 board they happened to pin to last week doesn't drown out the rest.
+
+Each board page also lists Pinterest's own topics for it ("places to
+travel", "fixie bike"), in English whatever the board is called. Those say
+what a board is about better than any single pin title does.
 """
 
 import html
@@ -19,6 +23,7 @@ import httpx
 
 MAX_PINS = 16  # from a whole profile, spread over its boards
 BOARD_PINS = 12  # from a single board link
+MAX_TOPICS = 5  # per board; "places to travel" is fifth for a Prague board
 MAX_QUERY_WORDS = 25
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (GiftPicker)"}
@@ -39,6 +44,13 @@ class PinterestError(ValueError):
 class Pin:
     text: str
     board: str = ""  # board name; "" when it came from the profile's recent feed
+
+
+@dataclass(frozen=True)
+class Board:
+    name: str
+    size: int
+    topics: tuple[str, ...]  # Pinterest's own, most relevant first
 
 
 @dataclass
@@ -151,35 +163,56 @@ def _page_title(url: str, client: httpx.Client) -> str:
     return "" if _GENERIC_TITLE.match(title) else title
 
 
-def _profile_boards(user: str, client: httpx.Client) -> dict[str, tuple[str, int]]:
-    """{slug: (name, pin count)} for the user's public boards, read from the
-    data embedded in their profile page. Empty if the page can't be read."""
+def _page_data(url: str, client: httpx.Client) -> list:
+    """The JSON Pinterest embeds in its pages, or [] if the page can't be read."""
     try:
-        resp = client.get(f"https://www.pinterest.com/{user}/", follow_redirects=True)
+        resp = client.get(url, follow_redirects=True)
     except httpx.HTTPError:
-        return {}
+        return []
     data = []
     for m in re.finditer(r'<script id="__PWS_(?:INITIAL_PROPS|DATA)__" type="application/json">(.*?)</script>', resp.text, re.S):
         try:
             data.append(json.loads(m.group(1)))
         except ValueError:
             pass
+    return data
 
-    boards: dict[str, tuple[str, int]] = {}
+
+def _walk(data):
+    """Every dict in the JSON, in document order."""
     stack = [data]
     while stack:
         node = stack.pop()
         if isinstance(node, list):
-            stack.extend(node)
+            stack.extend(reversed(node))
         elif isinstance(node, dict):
-            stack.extend(node.values())
-            parts = str(node.get("url") or "").strip("/").split("/")
-            count = node.get("pin_count")
-            if (node.get("type") == "board" and len(parts) == 2 and parts[0].lower() == user.lower()
-                    and _BOARD.match(parts[1]) and node.get("privacy", "public") == "public"
-                    and isinstance(count, int) and count > 0):
-                boards[parts[1]] = (str(node.get("name") or parts[1]), count)
+            yield node
+            stack.extend(reversed(list(node.values())))
+
+
+def _profile_boards(user: str, client: httpx.Client) -> dict[str, tuple[str, int]]:
+    """{slug: (name, pin count)} for the user's public boards, read from the
+    data embedded in their profile page. Empty if the page can't be read."""
+    boards: dict[str, tuple[str, int]] = {}
+    for node in _walk(_page_data(f"https://www.pinterest.com/{user}/", client)):
+        parts = str(node.get("url") or "").strip("/").split("/")
+        count = node.get("pin_count")
+        if (node.get("type") == "board" and len(parts) == 2 and parts[0].lower() == user.lower()
+                and _BOARD.match(parts[1]) and node.get("privacy", "public") == "public"
+                and isinstance(count, int) and count > 0):
+            boards[parts[1]] = (str(node.get("name") or parts[1]), count)
     return boards
+
+
+def _board_topics(user: str, slug: str, client: httpx.Client) -> tuple[str, ...]:
+    """Pinterest's topics for a board, from the "ideas" links on its page:
+    a board called "Prag" gives ("prague czech republic", "prague", ...)."""
+    topics: list[str] = []
+    for node in _walk(_page_data(f"https://www.pinterest.com/{user}/{slug}/", client)):
+        key = node.get("key")
+        if isinstance(key, str) and "/ideas/" in str(node.get("url") or "") and key not in topics:
+            topics.append(key)
+    return tuple(topics[:MAX_TOPICS])
 
 
 def allocate(sizes: dict[str, int], budget: int) -> dict[str, int]:
@@ -236,38 +269,49 @@ def _interleave(per_board: list[list[Pin]]) -> list[Pin]:
     return out
 
 
-def fetch_pins(text: str) -> tuple[Source, list[Pin]]:
-    """Returns the source and its pins, most important first: for a profile,
-    a size-weighted mix of its boards; for a board, its newest pins."""
+def fetch_profile(text: str) -> tuple[Source, list[Pin], list[Board]]:
+    """The source, its pins most important first (for a profile, a
+    size-weighted mix of its boards; for a board, its newest pins), and its
+    boards with their topics, biggest first."""
     with httpx.Client(headers=_HEADERS, timeout=10) as client:
         source = parse_source(text, client)
-        boards = {} if source.board else _profile_boards(source.user, client)
+        found = {} if source.board else _profile_boards(source.user, client)
 
-        if boards:
-            shares = allocate({slug: count for slug, (_, count) in boards.items()}, MAX_PINS)
+        if found:
+            shares = allocate({slug: count for slug, (_, count) in found.items()}, MAX_PINS)
 
-            def board_pins(slug: str) -> list[Pin]:
+            def read_board(slug: str) -> tuple[list[Pin], Board]:
+                name, size = found[slug]
+                board = Board(name, size, _board_topics(source.user, slug, client))
                 try:
                     items = _feed_items(Source(source.user, slug).feed_url, client, "")
                 except PinterestError:
-                    return []
+                    return [], board
                 # Fetch a couple extra in case some have no readable title.
                 texts = [t for t in _titles(items[: shares[slug] + 2], client) if t]
-                return [Pin(t, boards[slug][0]) for t in texts[: shares[slug]]]
+                return [Pin(t, name) for t in texts[: shares[slug]]], board
 
             with ThreadPoolExecutor(max_workers=len(shares)) as pool:
-                pins = _interleave([p for p in pool.map(board_pins, shares) if p])
+                read = list(pool.map(read_board, shares))
+            pins = _interleave([p for p, _ in read if p])
+            boards = [b for _, b in read]
         else:
             what = "board" if source.board else "profile"
             items = _feed_items(source.feed_url, client, f"Couldn't find that Pinterest {what}. Is it public?")
             if not items:
                 raise PinterestError("That Pinterest profile or board has no public pins yet.")
             pins = [Pin(t, source.board or "") for t in _titles(items[:BOARD_PINS], client) if t]
+            boards = []
+            if source.board:
+                boards = [Board(source.board, len(pins), _board_topics(source.user, source.board, client))]
 
-    pins = list({p.text: p for p in reversed(pins)}.values())[::-1]  # dedupe, keep first
-    if not pins:
+    unique: dict[str, Pin] = {}
+    for pin in pins:
+        unique.setdefault(pin.text, pin)
+    pins = list(unique.values())
+    if not pins and not any(b.topics for b in boards):
         raise PinterestError("Their pins don't have any titles or descriptions we can read. Try one of their boards, or type their interests instead.")
-    return source, pins
+    return source, pins, boards
 
 
 def short_label(pin: str, words: int = 6) -> str:

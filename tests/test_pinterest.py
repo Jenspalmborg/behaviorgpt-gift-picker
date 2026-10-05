@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 import pinterest
-from pinterest import Pin, PinterestError, _clean, _interleave, allocate, fetch_pins, parse_source, short_label
+from pinterest import Pin, PinterestError, _clean, _interleave, allocate, fetch_profile, parse_source, short_label
 
 
 @pytest.mark.parametrize("text, feed", [
@@ -91,7 +91,7 @@ def fake_pinterest(monkeypatch):
 
 
 def test_fetch_pins_falls_back_to_the_pin_page_title(fake_pinterest):
-    source, pins = fetch_pins("https://se.pinterest.com/jane/")
+    source, pins, boards = fetch_profile("https://se.pinterest.com/jane/")
     assert source.label == "jane"
     assert [p.text for p in pins] == ["Trail running vest for long runs", "Diy dinosaur play house | Dino house"]
     # Pin pages are only fetched from Pinterest, never from a link in the feed.
@@ -100,7 +100,7 @@ def test_fetch_pins_falls_back_to_the_pin_page_title(fake_pinterest):
 
 def test_fetch_pins_reports_a_missing_profile(fake_pinterest):
     with pytest.raises(PinterestError, match="Is it public"):
-        fetch_pins("nobody")
+        fetch_profile("nobody")
 
 
 def board_feed(*titles):
@@ -117,14 +117,19 @@ def fake_profile(monkeypatch):
         {"type": "board", "name": "Secret", "url": "/jane/secret/", "pin_count": 9, "privacy": "secret"},
     ]
     page = f'<script id="__PWS_INITIAL_PROPS__" type="application/json">{json.dumps({"x": {"boards": boards}})}</script>'
+    ideas = lambda *keys: ('<script id="__PWS_DATA__" type="application/json">'
+                           + json.dumps({"related": [{"url": f"/ideas/{k.replace(' ', '-')}/1/", "key": k} for k in keys]})
+                           + "</script>")
+    pages = {"/jane/": page, "/jane/watches/": ideas("luxury watches", "vintage watches"),
+             "/jane/art/": ideas("art", "sea sculpture", "lovecraft art", "weird vintage", "josef sudek", "dada")}
     feeds = {
         "/jane/watches.rss": board_feed(*[f"Watch {i}" for i in range(20)]),
         "/jane/art.rss": board_feed("Sculpture", "Painting", "Print"),
     }
 
     def handler(request):
-        if request.url.path == "/jane/":
-            return httpx.Response(200, text=page)
+        if request.url.path in pages:
+            return httpx.Response(200, text=pages[request.url.path])
         if request.url.path in feeds:
             return httpx.Response(200, text=feeds[request.url.path], headers={"content-type": "text/xml"})
         return httpx.Response(404)
@@ -135,8 +140,16 @@ def fake_profile(monkeypatch):
 
 
 def test_profile_pins_are_drawn_from_every_public_board(fake_profile):
-    _, pins = fetch_pins("jane")
+    _, pins, boards = fetch_profile("jane")
     boards = [p.board for p in pins]
     assert set(boards) == {"Watches", "Art"}  # the secret board is skipped
     assert boards.count("Watches") > boards.count("Art") >= 2
     assert boards[:2] == ["Watches", "Art"]  # mixed, biggest board first
+
+
+
+def test_boards_come_with_pinterests_topics(fake_profile):
+    _, _, boards = fetch_profile("jane")
+    assert [(b.name, b.size) for b in boards] == [("Watches", 40), ("Art", 3)]
+    assert boards[0].topics == ("luxury watches", "vintage watches")
+    assert boards[1].topics == ("art", "sea sculpture", "lovecraft art", "weird vintage", "josef sudek")  # capped at five

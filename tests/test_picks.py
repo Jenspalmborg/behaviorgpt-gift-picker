@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 import app as gift_app
 from app import GiftRequest, context_phrase, fits_age, name_stem, price_of, within_budget
-from conftest import CATALOG, make_item
+from conftest import CATALOG, FakeClient, make_item
 
 client = TestClient(gift_app.app)
 
@@ -95,13 +95,13 @@ def test_who_its_for_does_not_reserve_a_card(fake_client):
 
 
 def test_show_others_moves_on_to_interests_not_shown_recently(fake_client):
-    first = gifts(interests=["golf", "grill", "coffee"])
+    interests = ["golf", "grill", "coffee", "baby"]
+    first = gifts(interests=interests)
     shown_groups = [p["group"] for p in first["picks"] if p["group"]]
-    again = gifts(interests=["golf", "grill", "coffee"], exclude=[p["id"] for p in first["picks"]],
-                  recent_groups=shown_groups)
-    new_groups = [p["group"] for p in again["picks"] if p["group"]]
-    unseen = {"golf", "grill", "coffee"} - set(shown_groups)
-    assert unseen and new_groups[0] in unseen
+    unseen = set(interests) - set(shown_groups)
+    assert unseen
+    again = gifts(interests=interests, exclude=[p["id"] for p in first["picks"]], recent_groups=shown_groups)
+    assert unseen & {p["group"] for p in again["picks"]}
 
 
 def test_saved_products_drive_the_lead_card(fake_client):
@@ -123,7 +123,7 @@ def test_one_card_per_board(fake_client, monkeypatch):
     from pinterest import Pin, Source
     pins = [Pin("Acme Golf Balls", "Golf"), Pin("Birdie Golf Ball Marker", "Golf"),
             Pin("Swing Golf Practice Net", "Golf"), Pin("Pour Over Coffee Kettle", "Kitchen")]
-    monkeypatch.setattr(gift_app, "cached_pins", lambda link: (Source("jane"), pins))
+    monkeypatch.setattr(gift_app, "cached_profile", lambda link: (Source("jane"), pins, []))
     d = gifts(pinterest="jane")
     groups = [p["group"] for p in d["picks"] if p["group"]]
     assert len(groups) == len(set(groups))
@@ -131,7 +131,7 @@ def test_one_card_per_board(fake_client, monkeypatch):
 
 def test_baby_age_with_unsuitable_pins_falls_back_with_a_note(fake_client, monkeypatch):
     from pinterest import Pin, Source
-    monkeypatch.setattr(gift_app, "cached_pins", lambda link: (Source("jane"), [Pin("Omega Seamaster Golf Edition Watch", "Watches")]))
+    monkeypatch.setattr(gift_app, "cached_profile", lambda link: (Source("jane"), [Pin("Omega Seamaster Golf Edition Watch", "Watches")], []))
     d = gifts(person="boyfriend", pinterest="jane", age="baby")
     assert d["picks"] and all(p["reason"] == "A gift for baby" for p in d["picks"])
     assert d["note"] == "Nothing in their pins suits a baby, so these are general ideas."
@@ -164,3 +164,47 @@ def test_rejects_missing_or_mixed_inputs(fake_client, body):
 ])
 def test_rejects_invalid_fields(body):
     assert client.post("/api/gifts", json=body).status_code == 422
+
+
+class KitchenBiasedClient(FakeClient):
+    """Like the real model with a big food board: every personalized search
+    puts kitchen products first, whatever was searched."""
+
+    def complete(self, history, limit=10, **kw):
+        res = super().complete(history, limit, **kw)
+        if len(history) > 1:
+            kitchen = [make_item(r, 1.6) for r in CATALOG if r[2] == "Home & Kitchen"]
+            res.products.items = kitchen + res.products.items
+        return res
+
+
+def test_board_cards_stay_on_their_own_topic(monkeypatch):
+    from pinterest import Board, Pin, Source
+    monkeypatch.setattr(gift_app, "_client", KitchenBiasedClient())
+    gift_app._search.cache_clear()
+    boards = [Board("Mat", 40, ("coffee",)), Board("Prylar", 3, ("golf practice",))]
+    pins = [Pin("Pour Over Coffee Kettle", "Mat"), Pin("Smokehouse Grill Thermometer", "Mat")]
+    monkeypatch.setattr(gift_app, "cached_profile", lambda link: (Source("jane"), pins, boards))
+    d = gifts(pinterest="jane", n=1, focus="Prylar")
+    pick = d["picks"][0]
+    assert pick["group"] == "Prylar"
+    assert pick["reason"] == "For their love of golf practice"
+    assert pick["category"] == "Sports & Outdoors"
+
+
+def test_theme_seed_tries_each_topic_as_gift_and_accessories():
+    from pinterest import Board
+    seed = gift_app.theme_seed(Board("Prag", 4, ("prague", "places to travel")))
+    assert seed.queries == ["prague", "prague gift", "prague accessories",
+                            "places to travel", "places to travel gift", "places to travel accessories"]
+    assert gift_app.reason_for(seed, "places to travel accessories") == "For their love of places to travel"
+
+
+def test_top_match_counts_as_its_boards_card(fake_client):
+    rows = {r[1]: r for r in CATALOG}
+    watch = make_item(rows["Omega Seamaster Golf Edition Watch"])
+    seeds = [gift_app.interest_seed("golf"), gift_app.interest_seed("coffee")]
+    _, matched, _ = gift_app.build_history(seeds, None)
+    assert gift_app.closest_group(watch, matched) == "golf"
+    kettle = make_item(rows["Pour Over Coffee Kettle"])
+    assert gift_app.closest_group(kettle, matched) == "coffee"

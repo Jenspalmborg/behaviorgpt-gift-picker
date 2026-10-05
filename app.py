@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, StringConstraints
 
 import lists
 from lists import product_url
-from pinterest import Pin, PinterestError, fetch_pins, short_label
+from pinterest import Board, Pin, PinterestError, fetch_profile, short_label
 
 load_dotenv(override=True)
 
@@ -85,19 +85,37 @@ class GiftRequest(BaseModel):
 
 
 class Seed(BaseModel):
-    """One thing we know they like: a typed interest or a pin."""
+    """One thing we know they like: a typed interest, a board's theme (from
+    Pinterest's topics for it), or a single pin."""
 
+    kind: Literal["interest", "theme", "pin"]
     label: str
     queries: list[str]
-    reason: str
-    # What it's one of: the interest itself, or the board a pin is on. A
-    # screenful shows at most one card per group.
+    # What it's one of: the interest itself, or the board. A screenful shows
+    # at most one card per group.
     group: str
-    # Short form used to phrase occasion searches, like "golf birthday gift".
-    # None for pins: their titles are often long or not in English, and
-    # "Barnerom diy housewarming gift" finds nonsense.
-    topic: str | None
-    report_if_missing: bool = True
+    # Pins only add to the history; interests and themes also get cards,
+    # since their wording is a topic ("fixie bike") rather than a caption.
+    reason: str = ""
+
+
+_SUFFIXES = (" gift", " accessories")
+
+
+def topic_of(seed: Seed, query: str) -> str | None:
+    """The plain topic behind a seed's best query: "fixie bike accessories"
+    -> "fixie bike". None for pins: their titles are often long or not in
+    English, and "Barnerom diy housewarming gift" finds nonsense."""
+    if seed.kind == "pin":
+        return None
+    for suffix in _SUFFIXES:
+        if query.endswith(suffix):
+            return query.removesuffix(suffix)
+    return query
+
+
+def reason_for(seed: Seed, query: str) -> str:
+    return seed.reason or f"For their love of {topic_of(seed, query)}"
 
 
 _AGE_TERMS = {"baby": "baby", "kid": "kids", "teen": "teen", "senior": "seniors"}
@@ -170,23 +188,34 @@ def interest_seed(interest: str) -> Seed:
     """Broad words like "video games" can land on unrelated products, so try a
     few phrasings and keep the one the model is most confident about."""
     return Seed(
+        kind="interest",
         label=interest,
         queries=[interest, f"{interest} gift", f"{interest} accessories"],
         reason=f"For their love of {interest}",
         group=interest,
-        topic=interest,
+    )
+
+
+def theme_seed(board: Board) -> Seed:
+    """A board as one theme: Pinterest's topics for it, each tried as is, as
+    a gift and as accessories ("places to travel accessories" finds a luggage
+    scale), keeping the phrasing the model is most confident about."""
+    return Seed(
+        kind="theme",
+        label=board.name,
+        queries=[q for t in board.topics for q in (t, *(t + s for s in _SUFFIXES))],
+        group=board.name,
     )
 
 
 def pin_seed(pin: Pin) -> Seed:
     """Pin titles are already descriptive, so they're searched as written."""
     return Seed(
+        kind="pin",
         label=pin.text,
         queries=[pin.text],
         reason=f"Because they pinned “{short_label(pin.text)}”",
         group=pin.board or pin.text,
-        topic=None,
-        report_if_missing=False,
     )
 
 
@@ -220,7 +249,7 @@ def build_history(seeds: list[Seed], max_price: float | None):
     unmatched: list[str] = []
     for seed, (query, hits, score) in zip(seeds, resolved):
         if score < MIN_MATCH_SCORE or not hits:
-            if seed.report_if_missing:
+            if seed.kind == "interest":
                 unmatched.append(seed.label)
             continue
         matched.append((seed, query, hits))
@@ -245,6 +274,33 @@ def to_card(item: Item, reason: str, group: str | None = None) -> dict:
         "reason": reason,
         "group": group,
     }
+
+
+_STOPWORDS = {"with", "for", "and", "the", "set", "pack", "gift", "gifts", "men", "women", "mens", "womens"}
+
+
+def _words(name: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]{4,}", name.lower()) if w not in _STOPWORDS}
+
+
+def closest_group(item: Item, matched) -> str | None:
+    """Which interest or board a blended pick belongs to: among the seeds whose
+    own search results include its category, the one sharing the most words
+    with it ("Rolex: 3,621 Wristwatches" goes with the watch board), so that
+    board doesn't get a second card. None if nothing is close."""
+    words = _words(item.data.get("name", ""))
+    category = item.data.get("categories")
+    best, best_overlap = None, 0
+    for seed, query, _ in matched:
+        hits = _search(query)
+        if any(h.id == item.id for h in hits):
+            return seed.group
+        if category not in {h.data.get("categories") for h in hits}:
+            continue
+        overlap = len(words & set().union(*(_words(h.data.get("name", "")) for h in hits[:5])))
+        if overlap > best_overlap:
+            best, best_overlap = seed.group, overlap
+    return best
 
 
 def pick_gifts(seeds: list[Seed], req: GiftRequest):
@@ -295,37 +351,50 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
     # The model's view of "what does this person want next", given everything.
     recs = get_client().complete(history=history, limit=40).products.items
 
+    groups_used: set[str] = set()
     if not any(m[0].group == req.focus for m in matched):
         # 1) Best blended pick: the top recommendation across all interests.
+        #    It counts as the card for whichever interest or board it's from.
         lead = "More like what you saved" if req.liked else "Top match for their whole profile"
         for item in recs:
             if take(item, lead):
+                group = closest_group(item, matched)
+                picks[-1]["group"] = group
+                groups_used.add(group)
                 break
 
-    # 2) Then one per seed, personalized by the full profile, so the
-    #    alternatives cover different things they love. With an occasion or
-    #    age set, the search says so: "golf birthday gift".
-    #    Pins can't be phrased that way, so with an occasion picked they leave
-    #    the last slot for a search on the occasion alone, still personalized
-    #    by their pins. One card per group (interest or board); a few spare
-    #    seeds are searched in case some only repeat earlier picks.
-    occasion_slot = bool(req.occasion) and any(seed.topic is None for seed, _, _ in matched)
-    seed_slots = n - 1 if occasion_slot and n > 1 else n
-    candidates, groups = [], set()
+    # 2) Then one per interest or board, personalized by the full profile, so
+    #    the alternatives cover different things they love. A board's card
+    #    comes from its theme when Pinterest gave topics for it, else from a
+    #    pin. With an occasion or age set, the search says so ("fixie bike
+    #    birthday gift"). Pins can't be phrased that way, so if a pin has to
+    #    fill a card and an occasion is picked, the last slot searches the
+    #    occasion alone, still personalized by the profile.
+    #    Each card stays on its topic: only products from categories its own
+    #    plain search returned, so a bike board can't drift into food just
+    #    because the profile has a big food board. A few spare groups are
+    #    searched in case some only repeat earlier picks.
+    candidates = []
     for m in matched:
-        if m[0].group not in groups:
+        if m[0].group not in groups_used and all(c[0].group != m[0].group for c in candidates):
             candidates.append(m)
-            groups.add(m[0].group)
     candidates = candidates[: n + 3]
+    occasion_slot = bool(req.occasion) and any(seed.kind == "pin" for seed, _, _ in candidates)
+    seed_slots = n - 1 if occasion_slot and n > 1 else n
+
+    def phrased(seed: Seed, query: str) -> str:
+        topic = topic_of(seed, query)
+        return f"{topic} {ctx}" if ctx and topic else query
+
     with ThreadPoolExecutor(max_workers=len(candidates) + 1) as pool:
-        queries = [f"{seed.topic} {ctx}" if ctx and seed.topic else query for seed, query, _ in candidates]
-        per_seed = pool.map(personalized, queries)
+        per_seed = pool.map(lambda c: personalized(phrased(c[0], c[1])), candidates)
         for_occasion = pool.submit(personalized, ctx) if occasion_slot else None
-        for (seed, _, _), items in zip(candidates, per_seed):
+        for (seed, query, hits), items in zip(candidates, per_seed):
             if len(picks) >= seed_slots:
                 break
-            for item in items:
-                if take(item, seed.reason, seed.group):
+            on_topic = {i.data.get("categories") for i in _search(query)}
+            for item in [*(i for i in items if i.data.get("categories") in on_topic), *hits]:
+                if take(item, reason_for(seed, query), seed.group):
                     break
         if for_occasion:
             for item in for_occasion.result():
@@ -337,11 +406,11 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
         if len(picks) >= n:
             break
         take(item, "Also fits their profile")
-    for seed, _, hits in matched:
+    for seed, query, hits in matched:
         for item in hits:
             if len(picks) >= n:
                 break
-            take(item, seed.reason, seed.group)
+            take(item, reason_for(seed, query), seed.group)
 
     # 4) Still short, usually because nothing they like fits the age set:
     #    search the occasion or age alone, personalized by the profile.
@@ -353,7 +422,7 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
             take(item, general)
     note = None
     if req.age in _CHILD_CATEGORIES and picks and all(p["reason"] == general for p in picks):
-        note = f"Nothing in their {'pins' if matched[0][0].topic is None else 'interests'} suits a {_AGE_TERMS[req.age].rstrip('s')}, so these are general ideas."
+        note = f"Nothing in their {'interests' if matched[0][0].kind == 'interest' else 'pins'} suits a {_AGE_TERMS[req.age].rstrip('s')}, so these are general ideas."
 
     return picks[:n], unmatched, note
 
@@ -361,13 +430,13 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
 _pin_cache: dict[str, tuple[float, tuple]] = {}
 
 
-def cached_pins(link: str):
+def cached_profile(link: str):
     """Refining picks re-sends the same link, so keep its pins for a while."""
     key = link.strip().lower()
     hit = _pin_cache.get(key)
     if hit and time.monotonic() - hit[0] < PIN_CACHE_SECONDS:
         return hit[1]
-    result = fetch_pins(link)
+    result = fetch_profile(link)
     _pin_cache[key] = (time.monotonic(), result)
     return result
 
@@ -381,11 +450,12 @@ def gifts(req: GiftRequest):
         if interests:
             raise HTTPException(400, "Use either interests or a Pinterest link, not both.")
         try:
-            source, pins = cached_pins(req.pinterest)
+            source, pins, boards = cached_profile(req.pinterest)
         except PinterestError as exc:
             raise HTTPException(400, str(exc)) from exc
-        pinterest = {"label": source.label, "url": source.page_url, "pins": len(pins)}
-        seeds += [pin_seed(p) for p in pins]
+        pinterest = {"label": source.label, "url": source.page_url, "pins": len(pins), "boards": len(boards)}
+        # Themes first: they lead the history, mixed one per board.
+        seeds += [theme_seed(b) for b in boards if b.topics] + [pin_seed(p) for p in pins]
     if not seeds:
         raise HTTPException(400, "Add at least one interest or a Pinterest link.")
     try:
@@ -414,11 +484,16 @@ def gifts(req: GiftRequest):
 app.include_router(lists.router)
 
 
+# The pages hold all the front-end code, so browsers should check for a new
+# version on every load instead of running a stale copy against a newer API.
+NO_CACHE = {"Cache-Control": "no-cache"}
+
+
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    return FileResponse(STATIC / "index.html", headers=NO_CACHE)
 
 
 @app.get("/list/{list_id}")
 def list_page(list_id: str):
-    return FileResponse(STATIC / "list.html")
+    return FileResponse(STATIC / "list.html", headers=NO_CACHE)
