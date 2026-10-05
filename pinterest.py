@@ -73,10 +73,6 @@ class Source:
         return f"{self.user}/{self.board}" if self.board else self.user
 
 
-def looks_like_pinterest(text: str) -> bool:
-    return bool(re.search(r"pinterest\.|pin\.it/", text, re.I))
-
-
 def _resolve_short_link(url: str, client: httpx.Client) -> str:
     """pin.it links redirect a few times before reaching pinterest.com. Follow
     them by hand so we never fetch a host outside Pinterest."""
