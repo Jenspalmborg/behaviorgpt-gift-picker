@@ -4,7 +4,7 @@ Tell it what someone loves ("running, hiking, flowers"), or paste their Pinteres
 
 Every recommendation comes from BehaviorGPT. There is no LLM in the loop.
 
-![Gift ideas for Mom: running, hiking, flowers](docs/screenshots/picks.png)
+![Birthday gift ideas for Mom: running, hiking, flowers, under $60](docs/screenshots/picks.png)
 
 It is a small, complete example of building on the BehaviorGPT SDK: no catalog to upload, no user data. Just a synthetic history, recommendations and personalized search against one of the pre-embedded catalogs.
 
