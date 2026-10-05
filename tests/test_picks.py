@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as gift_app
-from app import GiftRequest, context_phrase, fits_age, name_stem, price_of, recipient, within_budget
+from app import GiftRequest, context_phrase, fits_age, name_stem, price_of, within_budget
 from conftest import CATALOG, make_item
 
 client = TestClient(gift_app.app)
@@ -12,27 +12,13 @@ def item(name):
     return make_item(next(row for row in CATALOG if row[1] == name))
 
 
-@pytest.mark.parametrize("person, expected", [
-    ("boyfriend", "boyfriend"),
-    ("my dad", "dad"),
-    ("Pappa", "dad"),
-    ("Anna (sister)", "sister"),
-    ("best friend Lisa", "best friend"),
-    ("mormor", "grandma"),
-    ("Anna", ""),
-    ("", ""),
-])
-def test_recipient_is_read_from_who_its_for(person, expected):
-    assert recipient(person) == expected
-
-
 @pytest.mark.parametrize("fields, expected", [
     ({}, ""),
-    ({"person": "Dad", "occasion": "birthday"}, "birthday gift for dad"),
-    ({"person": "Anna"}, ""),
-    ({"person": "my boyfriend", "age": "baby"}, "gift for baby"),  # a child's age wins
-    ({"person": "grandpa", "age": "senior"}, "gift for grandpa"),
-    ({"age": "senior"}, "gift for seniors"),
+    ({"person": "Dad"}, ""),  # who it's for never steers the picks
+    ({"person": "Dad", "occasion": "birthday"}, "birthday gift"),
+    ({"person": "my boyfriend", "age": "baby"}, "gift for baby"),
+    ({"occasion": "christmas", "age": "kid"}, "christmas gift for kids"),
+    ({"age": "adult"}, ""),
     ({"occasion": "housewarming"}, "housewarming gift"),
 ])
 def test_context_phrase(fields, expected):
@@ -60,6 +46,7 @@ def test_name_stem_matches_the_same_product_line():
     assert name_stem("Acme Golf Balls 12 Pack") == name_stem("Acme Golf Balls 24 Pack")
     assert name_stem("BBQ Grill Tools Set Gift for Dad") == name_stem("BBQ, Grill Tools: 20 pcs")
     assert name_stem("Acme Golf Balls") != name_stem("Birdie Golf Ball Marker")
+    assert name_stem("Borla 140597 Cat-Back Exhaust") == name_stem("BORLA 140753 Cat-Back Perf. Exhaust")
 
 
 def test_product_url_links_the_asin():
@@ -82,12 +69,12 @@ def test_first_picks_are_spread_over_interests(fake_client):
 
 
 def test_dismissing_skips_near_copies_but_stays_on_the_interest(fake_client):
-    d = gifts(interests=["golf"], n=1, focus="golf",
+    d = gifts(interests=["golf", "coffee"], n=1, focus="golf",
               exclude=["paB000000001"], avoid_similar=["Acme Golf Balls 12 Pack"])
     pick = d["picks"][0]
     assert "golf" in pick["name"].lower()
     assert not pick["name"].startswith("Acme Golf Balls")
-    assert pick["seed"] == "golf"
+    assert pick["group"] == "golf"
 
 
 def test_dismissing_does_not_ban_the_whole_category(fake_client):
@@ -99,6 +86,22 @@ def test_dismissing_does_not_ban_the_whole_category(fake_client):
         assert pick["category"] == "Sports & Outdoors"
         seen.append(pick["id"]); avoid.append(pick["name"])
     assert len(set(seen)) == 3
+
+
+def test_who_its_for_does_not_reserve_a_card(fake_client):
+    d = gifts(person="Dad", interests=["golf", "grill", "coffee"])
+    assert not any(p["reason"].startswith("A ") for p in d["picks"])
+    assert all("dad" not in " ".join(map(str, h)).lower() for h in fake_client.calls)
+
+
+def test_show_others_moves_on_to_interests_not_shown_recently(fake_client):
+    first = gifts(interests=["golf", "grill", "coffee"])
+    shown_groups = [p["group"] for p in first["picks"] if p["group"]]
+    again = gifts(interests=["golf", "grill", "coffee"], exclude=[p["id"] for p in first["picks"]],
+                  recent_groups=shown_groups)
+    new_groups = [p["group"] for p in again["picks"] if p["group"]]
+    unseen = {"golf", "grill", "coffee"} - set(shown_groups)
+    assert unseen and new_groups[0] in unseen
 
 
 def test_saved_products_drive_the_lead_card(fake_client):
@@ -116,9 +119,19 @@ def test_baby_age_keeps_only_baby_gifts(fake_client):
     assert all(fits_age(item(p["name"]), "baby") for p in d["picks"])
 
 
+def test_one_card_per_board(fake_client, monkeypatch):
+    from pinterest import Pin, Source
+    pins = [Pin("Acme Golf Balls", "Golf"), Pin("Birdie Golf Ball Marker", "Golf"),
+            Pin("Swing Golf Practice Net", "Golf"), Pin("Pour Over Coffee Kettle", "Kitchen")]
+    monkeypatch.setattr(gift_app, "cached_pins", lambda link: (Source("jane"), pins))
+    d = gifts(pinterest="jane")
+    groups = [p["group"] for p in d["picks"] if p["group"]]
+    assert len(groups) == len(set(groups))
+
+
 def test_baby_age_with_unsuitable_pins_falls_back_with_a_note(fake_client, monkeypatch):
-    from pinterest import Source
-    monkeypatch.setattr(gift_app, "cached_pins", lambda link: (Source("jane"), ["Omega Seamaster Golf Edition Watch"]))
+    from pinterest import Pin, Source
+    monkeypatch.setattr(gift_app, "cached_pins", lambda link: (Source("jane"), [Pin("Omega Seamaster Golf Edition Watch", "Watches")]))
     d = gifts(person="boyfriend", pinterest="jane", age="baby")
     assert d["picks"] and all(p["reason"] == "A gift for baby" for p in d["picks"])
     assert d["note"] == "Nothing in their pins suits a baby, so these are general ideas."

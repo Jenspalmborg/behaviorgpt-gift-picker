@@ -18,8 +18,8 @@ It is a small, complete example of building on the BehaviorGPT SDK: no catalog t
 | Turning interests into a profile | `Search` + `View` events, one pair per interest |
 | "Top match for their whole profile" | `complete` with the profile, ending on a `View` (recommendations) |
 | "For their love of …" | `complete` with the profile plus a final `Search` (personalized search) |
-| Pinterest import | each recent pin's title becomes a `Search` + `View` pair, newest pins last |
-| Occasion and recipient | the per-interest search says it: `Search("golf birthday gift for dad")` |
+| Pinterest import | pins from every board, weighted by board size; each title becomes a `Search` + `View` pair |
+| Occasion and age | the per-interest search says it: `Search("golf birthday gift")` |
 | ♥ Save, more like this | `View` + `AddToCart` of the saved product appended to the profile |
 | ✕ Not for them | same call, with that product and its near-copies excluded |
 
@@ -59,9 +59,13 @@ uv run pytest
 4. **Keep them different.** Picks skip the products already "viewed" in the session, anything over budget, and items too close to an earlier pick (same leaf category or same first words of the title).
 5. **Refine.** Saving a card adds `View` + `AddToCart` of it at the end of the session. The model leans hard on the latest events (one saved kettle turns every result into kettles), so only that card's slot follows the saves, as "More like what you saved"; the others stay tied to one interest each. ✕ replaces a card from the same interest, skipping near-copies of it (same first words of the title, usually the same brand and line) for the rest of the session. "Show me others" asks again while excluding everything already shown.
 
-**Pinterest.** Public profiles and boards have RSS feeds (`/<user>/feed.rss`, `/<user>/<board>.rss`), so no login or API key is needed. Many personal pins have no caption; for those the title of the pin's own page is used ("Diy dinosaur play house | Dinosaur dollhouse, …"). Pin titles are searched as written. With an occasion set, the last card searches the occasion alone ("housewarming gift"), still personalized by the pins, because phrases like "Barnerom diy housewarming gift" find nonsense.
+**Pinterest.** Public profiles and boards have RSS feeds (`/<user>/feed.rss`, `/<user>/<board>.rss`), so no login or API key is needed. For a profile, the board list and sizes come from the profile page, and 16 pins are split over the boards: one each, the rest by the square root of board size. A 1,000-pin watch board and a 10-pin clothes board come out about 7:1, so the big interest leads without drowning out the rest. Pins are interleaved across boards, so the latest events in the history are a mix. If the board list can't be read, the profile's recent-pins feed is used instead.
 
-**Occasion, recipient and age.** The recipient is read from "Who's it for?": "my boyfriend", "Pappa" or "Anna (sister)" give "boyfriend", "dad" and "sister", while a plain name gives nothing. These shape the search wording: "birthday gift for dad" on its own returns generic gift-shop items, but "golf birthday gift for dad" returns golf gifts. A child's age wins over the relationship ("gift for kids").
+Many personal pins have no caption; for those the title of the pin's own page is used ("Diy dinosaur play house | Dinosaur dollhouse, …"). Pin titles are searched as written. With an occasion set, the last card searches the occasion alone ("housewarming gift"), still personalized by the pins, because phrases like "Barnerom diy housewarming gift" find nonsense.
+
+**Rotation.** A screen shows at most one card per interest or board, and "Show me others" moves on to the ones not shown recently. They also move to the end of the history, so the top match drifts with them.
+
+**Occasion and age** shape the search wording: "birthday gift" on its own returns generic gift-shop items, but "golf birthday gift" returns golf gifts. "Who's it for?" is only used for the heading: a dad might want LEGO as much as a grill, so who they are never steers the picks.
 
 For a baby or a kid, age is also a filter, since the catalog has no age field: a pick must be in a children's category (Baby Products, Toys & Games, Children's Books, …) or say so in its name ("toddler", "6 months", "for kids"). If nothing they like passes, the cards fall back to general ideas for that age and the page says so. Teens shop from the same categories as adults, so for them only the wording changes.
 

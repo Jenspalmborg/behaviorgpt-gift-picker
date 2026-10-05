@@ -1,10 +1,14 @@
-"""Read someone's recent pins from a public Pinterest profile or board.
+"""Read someone's pins from a public Pinterest profile or board.
 
 Pinterest publishes an RSS feed for every public profile (/<user>/feed.rss)
-and board (/<user>/<board>.rss), so no login or API key is needed.
+and board (/<user>/<board>.rss), so no login or API key is needed. For a
+profile, pins are drawn from each board in proportion to its size, so the
+board they happened to pin to last week doesn't drown out the rest.
 """
 
 import html
+import json
+import math
 import re
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
@@ -13,7 +17,8 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-MAX_PINS = 12
+MAX_PINS = 16  # from a whole profile, spread over its boards
+BOARD_PINS = 12  # from a single board link
 MAX_QUERY_WORDS = 25
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (GiftPicker)"}
@@ -28,6 +33,12 @@ _NOT_USERS = {"pin", "search", "ideas", "today", "explore", "business", "setting
 
 class PinterestError(ValueError):
     """Shown to the user as-is."""
+
+
+@dataclass(frozen=True)
+class Pin:
+    text: str
+    board: str = ""  # board name; "" when it came from the profile's recent feed
 
 
 @dataclass
@@ -101,8 +112,14 @@ def parse_source(text: str, client: httpx.Client) -> Source:
     return Source(user, board)
 
 
+# Pins saved straight from an image keep its file name as their title:
+# "enhanced-buzz-31045-1434731585-7.jpg 600 × 2 557 pixlar".
+_FILE_NAME = re.compile(r"\S*\.(?:jpe?g|png|gif|webp)\b.*$", re.I)
+
+
 def _clean(text: str) -> str:
-    text = " ".join(html.unescape(text).replace("[Video]", " ").split())
+    text = html.unescape(text).replace("[Video]", " ")
+    text = _FILE_NAME.sub("", text).replace("_", " ")
     return " ".join(text.split()[:MAX_QUERY_WORDS])
 
 
@@ -134,36 +151,120 @@ def _page_title(url: str, client: httpx.Client) -> str:
     return "" if _GENERIC_TITLE.match(title) else title
 
 
-def fetch_pins(text: str) -> tuple[Source, list[str]]:
-    """Returns the source and the text of its most recent pins, newest first."""
+def _profile_boards(user: str, client: httpx.Client) -> dict[str, tuple[str, int]]:
+    """{slug: (name, pin count)} for the user's public boards, read from the
+    data embedded in their profile page. Empty if the page can't be read."""
+    try:
+        resp = client.get(f"https://www.pinterest.com/{user}/", follow_redirects=True)
+    except httpx.HTTPError:
+        return {}
+    data = []
+    for m in re.finditer(r'<script id="__PWS_(?:INITIAL_PROPS|DATA)__" type="application/json">(.*?)</script>', resp.text, re.S):
+        try:
+            data.append(json.loads(m.group(1)))
+        except ValueError:
+            pass
+
+    boards: dict[str, tuple[str, int]] = {}
+    stack = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
+        elif isinstance(node, dict):
+            stack.extend(node.values())
+            parts = str(node.get("url") or "").strip("/").split("/")
+            count = node.get("pin_count")
+            if (node.get("type") == "board" and len(parts) == 2 and parts[0].lower() == user.lower()
+                    and _BOARD.match(parts[1]) and node.get("privacy", "public") == "public"
+                    and isinstance(count, int) and count > 0):
+                boards[parts[1]] = (str(node.get("name") or parts[1]), count)
+    return boards
+
+
+def allocate(sizes: dict[str, int], budget: int) -> dict[str, int]:
+    """Split `budget` pins over boards: one each, the rest by the square root
+    of board size. 1,000 watches vs 10 clothes comes out about 7:1, so the
+    big board leads without silencing the small one."""
+    boards = sorted(sizes, key=lambda b: -sizes[b])[:budget]
+    if not boards:
+        return {}
+    shares = dict.fromkeys(boards, 1)
+    spare = budget - len(boards)
+    weight = {b: math.sqrt(sizes[b]) for b in boards}
+    ideal = {b: spare * weight[b] / sum(weight.values()) for b in boards}
+    for b in boards:
+        shares[b] += int(ideal[b])
+    leftover = budget - sum(shares.values())
+    for b in sorted(boards, key=lambda b: int(ideal[b]) - ideal[b])[:leftover]:
+        shares[b] += 1
+    return {b: min(n, sizes[b]) for b, n in shares.items()}
+
+
+def _feed_items(url: str, client: httpx.Client, missing: str) -> list[ET.Element]:
+    try:
+        resp = client.get(url, follow_redirects=True)
+    except httpx.HTTPError as exc:
+        raise PinterestError("Couldn't reach Pinterest. Try again in a moment.") from exc
+    if resp.status_code == 404:
+        raise PinterestError(missing)
+    if resp.status_code != 200 or "xml" not in resp.headers.get("content-type", ""):
+        raise PinterestError("Pinterest didn't return their pins. Try again in a moment.")
+    try:
+        return list(ET.fromstring(resp.content).iter("item"))
+    except ET.ParseError as exc:
+        raise PinterestError("Pinterest sent back something unreadable. Try again.") from exc
+
+
+def _titles(items: list[ET.Element], client: httpx.Client) -> list[str]:
+    """Pin texts in feed order, using the pin's page title where the feed has none."""
+    texts = [_pin_text(item) for item in items]
+    untitled = [i for i, t in enumerate(texts) if not t]
+    if untitled:
+        with ThreadPoolExecutor(max_workers=min(len(untitled), 16)) as pool:
+            links = [items[i].findtext("link") or "" for i in untitled]
+            for i, title in zip(untitled, pool.map(lambda u: _page_title(u, client), links)):
+                texts[i] = title
+    return texts
+
+
+def _interleave(per_board: list[list[Pin]]) -> list[Pin]:
+    """Round-robin over boards (biggest first), so any prefix is a mix."""
+    out = []
+    for i in range(max(map(len, per_board), default=0)):
+        out += [pins[i] for pins in per_board if i < len(pins)]
+    return out
+
+
+def fetch_pins(text: str) -> tuple[Source, list[Pin]]:
+    """Returns the source and its pins, most important first: for a profile,
+    a size-weighted mix of its boards; for a board, its newest pins."""
     with httpx.Client(headers=_HEADERS, timeout=10) as client:
         source = parse_source(text, client)
-        try:
-            resp = client.get(source.feed_url, follow_redirects=True)
-        except httpx.HTTPError as exc:
-            raise PinterestError("Couldn't reach Pinterest. Try again in a moment.") from exc
-        if resp.status_code == 404:
+        boards = {} if source.board else _profile_boards(source.user, client)
+
+        if boards:
+            shares = allocate({slug: count for slug, (_, count) in boards.items()}, MAX_PINS)
+
+            def board_pins(slug: str) -> list[Pin]:
+                try:
+                    items = _feed_items(Source(source.user, slug).feed_url, client, "")
+                except PinterestError:
+                    return []
+                # Fetch a couple extra in case some have no readable title.
+                texts = [t for t in _titles(items[: shares[slug] + 2], client) if t]
+                return [Pin(t, boards[slug][0]) for t in texts[: shares[slug]]]
+
+            with ThreadPoolExecutor(max_workers=len(shares)) as pool:
+                pins = _interleave([p for p in pool.map(board_pins, shares) if p])
+        else:
             what = "board" if source.board else "profile"
-            raise PinterestError(f"Couldn't find that Pinterest {what}. Is it public?")
-        if resp.status_code != 200 or "xml" not in resp.headers.get("content-type", ""):
-            raise PinterestError("Pinterest didn't return their pins. Try again in a moment.")
+            items = _feed_items(source.feed_url, client, f"Couldn't find that Pinterest {what}. Is it public?")
+            if not items:
+                raise PinterestError("That Pinterest profile or board has no public pins yet.")
+            pins = [Pin(t, source.board or "") for t in _titles(items[:BOARD_PINS], client) if t]
 
-        try:
-            items = list(ET.fromstring(resp.content).iter("item"))[:MAX_PINS]
-        except ET.ParseError as exc:
-            raise PinterestError("Pinterest sent back something unreadable. Try again.") from exc
-        if not items:
-            raise PinterestError("That Pinterest profile or board has no public pins yet.")
-
-        texts = [_pin_text(item) for item in items]
-        untitled = [i for i, t in enumerate(texts) if not t]
-        if untitled:
-            with ThreadPoolExecutor(max_workers=len(untitled)) as pool:
-                links = [items[i].findtext("link") or "" for i in untitled]
-                for i, title in zip(untitled, pool.map(lambda u: _page_title(u, client), links)):
-                    texts[i] = title
-
-    pins = list(dict.fromkeys(t for t in texts if t))
+    pins = list({p.text: p for p in reversed(pins)}.values())[::-1]  # dedupe, keep first
     if not pins:
         raise PinterestError("Their pins don't have any titles or descriptions we can read. Try one of their boards, or type their interests instead.")
     return source, pins

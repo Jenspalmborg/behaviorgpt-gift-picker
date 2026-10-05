@@ -353,6 +353,7 @@ Object.assign(state, {
   cards: [],       // the three suggestions on screen
   busy: new Set(), // slots being replaced
   shown: [], liked: [], avoid: [],
+  groups: [],      // interests/boards the cards came from, oldest first
   saved: loadSaved(),
   shareUrl: null, sharing: false, flash: null,
 });
@@ -465,11 +466,12 @@ async function fetchPicks(n, { focus = null, liked = state.liked, keep = [] } = 
   const avoid_similar = [...state.avoid.slice(-30), ...keep.map(g => g.name)];
   const res = await fetch("/api/gifts", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...state.query, n, focus, liked, exclude, avoid_similar }),
+    body: JSON.stringify({ ...state.query, n, focus, liked, exclude, avoid_similar, recent_groups: state.groups.slice(-20) }),
   }).catch(() => { throw new Error("Couldn’t reach the server. Is it running?"); });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Something went wrong.");
   state.shown.push(...data.picks.map(g => g.id));
+  state.groups = [...state.groups.filter(x => !data.picks.some(g => g.group === x)), ...data.picks.map(g => g.group).filter(Boolean)];
   return data;
 }
 
@@ -506,7 +508,7 @@ function nope(i) {
   // blended slot: follow the saves, unless another card already does.
   const followingSaves = state.cards.some((c, k) => k !== i && c.reason === SAVED_REASON);
   refill([i], "No other ideas left for that slot. Try “Show me others” or a bigger budget.",
-         { focus: g.seed, liked: followingSaves ? [] : state.liked });
+         { focus: g.group, liked: followingSaves ? [] : state.liked });
 }
 
 function showOthers() {
@@ -534,7 +536,7 @@ async function share() {
 }
 
 function reset() {
-  Object.assign(state, { interests: [], query: null, meta: null, cards: [], shown: [], liked: [], avoid: [],
+  Object.assign(state, { interests: [], query: null, meta: null, cards: [], shown: [], liked: [], avoid: [], groups: [],
                          saved: [], shareUrl: null, flash: null, error: null });
   storeSaved();
   ["name", "budget", "interest-input", "pinterest-input", "occasion", "age"].forEach(id => $(id).value = "");
@@ -582,7 +584,7 @@ $("finder").addEventListener("submit", async e => {
     occasion: $("occasion").value || null,
     age: $("age").value || null,
   };
-  Object.assign(state, { cards: [], shown: [], liked: [], avoid: [], flash: null, loading: true });
+  Object.assign(state, { cards: [], shown: [], liked: [], avoid: [], groups: [], flash: null, loading: true });
   $("go").disabled = true; renderResults();
   try {
     const data = await fetchPicks(3);

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, StringConstraints
 
 import lists
 from lists import product_url
-from pinterest import PinterestError, fetch_pins, short_label
+from pinterest import Pin, PinterestError, fetch_pins, short_label
 
 load_dotenv(override=True)
 
@@ -75,9 +75,12 @@ class GiftRequest(BaseModel):
     liked: list[ProductId] = Field(default_factory=list, max_length=12)
     exclude: list[ProductId] = Field(default_factory=list, max_length=120)
     avoid_similar: list[Annotated[str, StringConstraints(max_length=300)]] = Field(default_factory=list, max_length=40)
-    # Replacing a card that came from one interest or pin: draw from that same
-    # seed instead of the blended pick, so the slot keeps its theme.
+    # Replacing a card that came from one interest or board: draw from that
+    # same group instead of the blended pick, so the slot keeps its theme.
     focus: str | None = Field(None, max_length=300)
+    # Groups (interests or boards) shown recently, so new cards move on to
+    # the others instead of starting over at the first one.
+    recent_groups: list[Annotated[str, StringConstraints(max_length=300)]] = Field(default_factory=list, max_length=40)
     n: int = Field(N_PICKS, ge=1, le=N_PICKS)
 
 
@@ -87,40 +90,17 @@ class Seed(BaseModel):
     label: str
     queries: list[str]
     reason: str
-    # Short form used to phrase occasion searches, like "golf birthday gift for
-    # dad". None for pins: their titles are often long or not in English, and
+    # What it's one of: the interest itself, or the board a pin is on. A
+    # screenful shows at most one card per group.
+    group: str
+    # Short form used to phrase occasion searches, like "golf birthday gift".
+    # None for pins: their titles are often long or not in English, and
     # "Barnerom diy housewarming gift" finds nonsense.
     topic: str | None
     report_if_missing: bool = True
 
 
 _AGE_TERMS = {"baby": "baby", "kid": "kids", "teen": "teen", "senior": "seniors"}
-
-# Words in "Who's it for?" that say who they are to you, as the catalog's
-# sellers would phrase it ("gift for boyfriend"). Swedish too, for "pappa".
-_RECIPIENTS = {
-    "mom": "mom", "mum": "mom", "mother": "mom", "mamma": "mom",
-    "dad": "dad", "father": "dad", "pappa": "dad",
-    "boyfriend": "boyfriend", "pojkvän": "boyfriend", "girlfriend": "girlfriend", "flickvän": "girlfriend",
-    "husband": "husband", "wife": "wife", "fru": "wife", "partner": "partner", "sambo": "partner",
-    "fiance": "fiance", "fiancé": "fiance", "fiancee": "fiancee", "fiancée": "fiancee",
-    "sister": "sister", "syster": "sister", "brother": "brother", "bror": "brother",
-    "friend": "friend", "bestie": "best friend", "vän": "friend", "kompis": "friend",
-    "coworker": "coworker", "colleague": "coworker", "kollega": "coworker", "boss": "boss", "chef": "boss",
-    "grandma": "grandma", "grandmother": "grandma", "granny": "grandma", "mormor": "grandma", "farmor": "grandma",
-    "grandpa": "grandpa", "grandfather": "grandpa", "morfar": "grandpa", "farfar": "grandpa",
-    "son": "son", "daughter": "daughter", "dotter": "daughter",
-    "aunt": "aunt", "uncle": "uncle", "niece": "niece", "nephew": "nephew", "teacher": "teacher", "lärare": "teacher",
-}
-
-
-def recipient(person: str) -> str:
-    """'my boyfriend' -> 'boyfriend', 'Anna (sister)' -> 'sister', 'Anna' -> ''."""
-    words = re.findall(r"[^\W\d_]+", person.lower())
-    if "best" in words and "friend" in words:
-        return "best friend"
-    return next((_RECIPIENTS[w] for w in words if w in _RECIPIENTS), "")
-
 
 # The catalog has no age field. For young children, keep products from
 # children's categories, or whose name says who they're for. Teens buy from
@@ -146,12 +126,10 @@ def fits_age(item: Item, age: str | None) -> bool:
 
 
 def context_phrase(req: GiftRequest) -> str:
-    """'birthday gift for dad', 'gift for teen', or '' when nothing is set.
-    A child's age says more than the relationship ("dad" of a toddler isn't
-    the recipient), so baby/kid/teen win over it."""
-    who = recipient(req.person)
-    if req.age in ("baby", "kid", "teen") or (req.age == "senior" and not who):
-        who = _AGE_TERMS[req.age]
+    """'birthday gift for kids', 'christmas gift', or '' when nothing is set.
+    Only what was picked explicitly counts: "Who's it for?" stays out, since
+    a dad might want LEGO as much as a grill."""
+    who = _AGE_TERMS.get(req.age or "", "")
     if not (req.occasion or who):
         return ""
     return " ".join(p for p in (req.occasion, "gift", f"for {who}" if who else "") if p)
@@ -175,8 +153,10 @@ def within_budget(item: Item, max_price: float | None) -> bool:
 
 def name_stem(name: str) -> str:
     """First words of a title, which are usually the brand and product line:
-    "BBQ Grill Tools Set Gift for Dad" and "BBQ Grill Tools Set, 20 Pcs" match."""
-    return " ".join(re.findall(r"\w+", name.lower())[:3])
+    "BBQ Grill Tools Set Gift for Dad" and "BBQ Grill Tools Set, 20 Pcs" match.
+    Words with digits are skipped, so "Borla 140597 Cat-Back" and "BORLA 140753
+    Cat-Back" match too."""
+    return " ".join([w for w in re.findall(r"\w+", name.lower()) if not any(c.isdigit() for c in w)][:3])
 
 
 def category_key(item: Item) -> str:
@@ -193,16 +173,18 @@ def interest_seed(interest: str) -> Seed:
         label=interest,
         queries=[interest, f"{interest} gift", f"{interest} accessories"],
         reason=f"For their love of {interest}",
+        group=interest,
         topic=interest,
     )
 
 
-def pin_seed(pin: str) -> Seed:
+def pin_seed(pin: Pin) -> Seed:
     """Pin titles are already descriptive, so they're searched as written."""
     return Seed(
-        label=pin,
-        queries=[pin],
-        reason=f"Because they pinned “{short_label(pin)}”",
+        label=pin.text,
+        queries=[pin.text],
+        reason=f"Because they pinned “{short_label(pin.text)}”",
+        group=pin.board or pin.text,
         topic=None,
         report_if_missing=False,
     )
@@ -247,7 +229,7 @@ def build_history(seeds: list[Seed], max_price: float | None):
     return history, matched, unmatched
 
 
-def to_card(item: Item, reason: str, seed: str | None = None) -> dict:
+def to_card(item: Item, reason: str, group: str | None = None) -> dict:
     d = item.data
     name = d.get("name", "Unknown")
     return {
@@ -261,11 +243,17 @@ def to_card(item: Item, reason: str, seed: str | None = None) -> dict:
         "url": product_url(item.id, name),
         "score": round(item.score, 4),
         "reason": reason,
-        "seed": seed,
+        "group": group,
     }
 
 
 def pick_gifts(seeds: list[Seed], req: GiftRequest):
+    # Seeds come in priority order (for pins, already mixed across boards).
+    # Groups shown recently move back and a focused group to the front. That
+    # order also sets the history, whose latest events steer the model most,
+    # so the top match drifts as they ask for others.
+    recent = set(req.recent_groups)
+    seeds = sorted(seeds, key=lambda seed: (seed.group != req.focus, seed.group in recent))
     history, matched, unmatched = build_history(seeds, req.max_price)
     if not history:
         return [], unmatched, None
@@ -285,7 +273,7 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
     used_cats: set[str] = set()
     used_stems: set[str] = {name_stem(n) for n in req.avoid_similar}
 
-    def take(item: Item, reason: str, seed: str | None = None) -> bool:
+    def take(item: Item, reason: str, group: str | None = None) -> bool:
         cat = category_key(item)
         # Catches variants like "800 vs 1,700 Robux" and the same set from one brand.
         stem = name_stem(item.data.get("name", ""))
@@ -295,7 +283,7 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
             return False
         if not within_budget(item, req.max_price) or not fits_age(item, req.age):
             return False
-        picks.append(to_card(item, reason, seed))
+        picks.append(to_card(item, reason, group))
         used_ids.add(item.id)
         used_cats.add(cat)
         used_stems.add(stem)
@@ -307,10 +295,7 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
     # The model's view of "what does this person want next", given everything.
     recs = get_client().complete(history=history, limit=40).products.items
 
-    focused = [m for m in matched if m[0].label == req.focus]
-    if focused:
-        matched = focused + [m for m in matched if m[0].label != req.focus]
-    else:
+    if not any(m[0].group == req.focus for m in matched):
         # 1) Best blended pick: the top recommendation across all interests.
         lead = "More like what you saved" if req.liked else "Top match for their whole profile"
         for item in recs:
@@ -319,13 +304,19 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
 
     # 2) Then one per seed, personalized by the full profile, so the
     #    alternatives cover different things they love. With an occasion or
-    #    recipient set, the search says so: "golf birthday gift for dad".
-    #    Pins can't be phrased that way, so they leave the last slot for a
-    #    search on the occasion alone, still personalized by their pins.
-    #    A few spare seeds are searched in case some only repeat earlier picks.
-    occasion_slot = bool(ctx) and any(seed.topic is None for seed, _, _ in matched)
+    #    age set, the search says so: "golf birthday gift".
+    #    Pins can't be phrased that way, so with an occasion picked they leave
+    #    the last slot for a search on the occasion alone, still personalized
+    #    by their pins. One card per group (interest or board); a few spare
+    #    seeds are searched in case some only repeat earlier picks.
+    occasion_slot = bool(req.occasion) and any(seed.topic is None for seed, _, _ in matched)
     seed_slots = n - 1 if occasion_slot and n > 1 else n
-    candidates = matched[: n + 3]
+    candidates, groups = [], set()
+    for m in matched:
+        if m[0].group not in groups:
+            candidates.append(m)
+            groups.add(m[0].group)
+    candidates = candidates[: n + 3]
     with ThreadPoolExecutor(max_workers=len(candidates) + 1) as pool:
         queries = [f"{seed.topic} {ctx}" if ctx and seed.topic else query for seed, query, _ in candidates]
         per_seed = pool.map(personalized, queries)
@@ -334,7 +325,7 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
             if len(picks) >= seed_slots:
                 break
             for item in items:
-                if take(item, seed.reason, seed.label):
+                if take(item, seed.reason, seed.group):
                     break
         if for_occasion:
             for item in for_occasion.result():
@@ -350,10 +341,10 @@ def pick_gifts(seeds: list[Seed], req: GiftRequest):
         for item in hits:
             if len(picks) >= n:
                 break
-            take(item, seed.reason, seed.label)
+            take(item, seed.reason, seed.group)
 
     # 4) Still short, usually because nothing they like fits the age set:
-    #    search the occasion or recipient alone, personalized by the profile.
+    #    search the occasion or age alone, personalized by the profile.
     general = f"A {ctx}"
     if len(picks) < n and ctx:
         for item in personalized(ctx, limit=30):
